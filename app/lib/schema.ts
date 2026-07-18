@@ -4,6 +4,8 @@ export interface KidProfile {
   age: number;
   weeklyAllowance: number;
   paydayWeekday: number; // 0 = Sunday ... 6 = Saturday
+  createdAt: string;
+  lastAllowancePaidAt?: string;
 }
 
 export type TransactionSource =
@@ -134,6 +136,17 @@ export interface FamilyBankState {
 
 export const CURRENT_STATE_VERSION = 1;
 
+export const SPENDING_CATEGORIES = [
+  { emoji: "🍕", label: "Food" },
+  { emoji: "🎮", label: "Games" },
+  { emoji: "🧸", label: "Toys" },
+  { emoji: "👕", label: "Clothes" },
+  { emoji: "🎬", label: "Fun" },
+  { emoji: "📚", label: "Books" },
+  { emoji: "🎁", label: "Gifts" },
+  { emoji: "❓", label: "Other" },
+] as const;
+
 export function createEmptyState(familyId: string): FamilyBankState {
   const now = new Date().toISOString();
   return {
@@ -151,7 +164,11 @@ export function createEmptyState(familyId: string): FamilyBankState {
       hysaApr: 0.036,
       cdApr: 0.045,
       taxRate: 0.05,
-      dadMatchMilestones: [],
+      dadMatchMilestones: [
+        { weeks: 4, bonus: 5 },
+        { weeks: 8, bonus: 10 },
+        { weeks: 12, bonus: 20 },
+      ],
     },
     reconciliation: {
       actualHysaBalance: 0,

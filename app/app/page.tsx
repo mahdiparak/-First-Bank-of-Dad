@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { AddKidForm, type AddKidFormValues } from "@/components/add-kid-form";
+import { KidDashboard } from "@/components/kid-dashboard";
+import { runScheduledEngines } from "@/lib/allowance";
 import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
+import { addKid } from "@/lib/mutations";
 import { createEmptyState, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
@@ -20,11 +24,19 @@ const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "";
 
 type Phase = "loading" | "enter-phrase" | "ready";
 
+function primeState(loaded: FamilyBankState | null): FamilyBankState | null {
+  if (!loaded) return null;
+  const processed = runScheduledEngines(loaded);
+  if (processed !== loaded) void saveState(processed);
+  return processed;
+}
+
 export default function Home() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [phraseInput, setPhraseInput] = useState("");
   const [phraseError, setPhraseError] = useState<string | null>(null);
   const [state, setState] = useState<FamilyBankState | null>(null);
+  const [selectedKidId, setSelectedKidId] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
   const [importError, setImportError] = useState<string | null>(null);
 
@@ -48,7 +60,7 @@ export default function Home() {
       }
 
       roomIdRef.current = roomId;
-      setState(storedState);
+      setState(primeState(storedState));
       setPhase("ready");
       startSync(key, roomId);
     })();
@@ -107,7 +119,7 @@ export default function Home() {
     setPhraseInput("");
 
     const existing = await loadState();
-    setState(existing);
+    setState(primeState(existing));
     setPhase("ready");
     startSync(key, roomId);
   }
@@ -118,20 +130,22 @@ export default function Home() {
     if (!file) return;
     try {
       const imported = await importStateFromFile(file);
-      setState(imported);
+      commitState(imported);
       setImportError(null);
-      await broadcastSnapshot(imported);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "Import failed.");
     }
   }
 
-  async function handleCreateFresh() {
+  function handleCreateFresh() {
     if (!roomIdRef.current) return;
-    const fresh = createEmptyState(roomIdRef.current);
-    await saveState(fresh);
-    setState(fresh);
-    await broadcastSnapshot(fresh);
+    commitState(createEmptyState(roomIdRef.current));
+  }
+
+  function commitState(newState: FamilyBankState) {
+    setState(newState);
+    void saveState(newState);
+    void broadcastSnapshot(newState);
   }
 
   async function broadcastSnapshot(snapshot: FamilyBankState) {
@@ -142,6 +156,16 @@ export default function Home() {
       deviceId: deviceIdRef.current,
       sentAt: new Date().toISOString(),
     });
+  }
+
+  function handleAddKid(values: AddKidFormValues) {
+    if (!state) return;
+    commitState(addKid(state, values));
+  }
+
+  function handleMutate(mutator: (state: FamilyBankState) => FamilyBankState) {
+    if (!state) return;
+    commitState(mutator(state));
   }
 
   if (phase === "loading") {
@@ -180,6 +204,12 @@ export default function Home() {
     );
   }
 
+  const effectiveSelectedKidId =
+    state && selectedKidId && state.kids.some((kid) => kid.id === selectedKidId)
+      ? selectedKidId
+      : (state?.kids[0]?.id ?? null);
+  const selectedKid = state?.kids.find((kid) => kid.id === effectiveSelectedKidId) ?? null;
+
   return (
     <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
       <header className="flex items-center justify-between">
@@ -210,15 +240,31 @@ export default function Home() {
         </section>
       ) : (
         <>
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {state.kids.length === 0 && <p className="text-sm opacity-70">No kids set up yet.</p>}
-            {state.kids.map((kid) => (
-              <div key={kid.id} className="rounded-xl border border-black/10 p-4 dark:border-white/10">
-                <p className="text-sm opacity-70">{kid.name}</p>
-                <p className="text-2xl font-semibold">{formatCurrency(balanceForKid(state, kid.id))}</p>
-              </div>
-            ))}
-          </section>
+          {state.kids.length > 0 && (
+            <nav className="flex flex-wrap gap-2">
+              {state.kids.map((kid) => (
+                <button
+                  key={kid.id}
+                  onClick={() => setSelectedKidId(kid.id)}
+                  className={`rounded-full px-3 py-1.5 text-sm ${
+                    kid.id === effectiveSelectedKidId
+                      ? "bg-black text-white dark:bg-white dark:text-black"
+                      : "border border-black/20 dark:border-white/20"
+                  }`}
+                >
+                  {kid.name}
+                </button>
+              ))}
+            </nav>
+          )}
+
+          {selectedKid ? (
+            <KidDashboard state={state} kid={selectedKid} onMutate={handleMutate} />
+          ) : (
+            <p className="text-sm opacity-70">Add a kid below to get started.</p>
+          )}
+
+          <AddKidForm onSubmit={handleAddKid} />
 
           <section className="flex flex-wrap gap-3">
             <button
@@ -243,16 +289,6 @@ export default function Home() {
       )}
     </main>
   );
-}
-
-function balanceForKid(state: FamilyBankState, kidId: string): number {
-  return state.transactions
-    .filter((transaction) => transaction.kidId === kidId)
-    .reduce((total, transaction) => total + transaction.amount, 0);
-}
-
-function formatCurrency(amount: number): string {
-  return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
 function SyncBadge({ status }: { status: SyncStatus }) {
