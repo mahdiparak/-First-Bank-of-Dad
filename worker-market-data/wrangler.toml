@@ -1,0 +1,14 @@
+name = "first-bank-of-dad-market-data"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Create with: wrangler kv namespace create MARKET_KV
+# then replace the id below with the one it prints.
+kv_namespaces = [
+  { binding = "MARKET_KV", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+]
+
+# Weekdays 22:30 UTC = 6:30pm EST / 5:30pm EDT — safely after the
+# US market's 4pm ET close regardless of daylight saving.
+[triggers]
+crons = ["30 22 * * 1-5"]

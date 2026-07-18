@@ -1,0 +1,12 @@
+{
+  "name": "first-bank-of-dad-market-data",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "set-admin-token": "wrangler secret put ADMIN_TOKEN"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
