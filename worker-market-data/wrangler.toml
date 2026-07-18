@@ -1,11 +1,9 @@
-name = "first-bank-of-dad-market-data"
+name = "firstbankofdad-market-data"
 main = "worker.js"
 compatibility_date = "2024-11-01"
 
-# Create with: wrangler kv namespace create MARKET_KV
-# then replace the id below with the one it prints.
 kv_namespaces = [
-  { binding = "MARKET_KV", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+  { binding = "MARKET_KV", id = "5756516e77ec469c9577e3f96730d416" }
 ]
 
 # Weekdays 22:30 UTC = 6:30pm EST / 5:30pm EDT — safely after the
