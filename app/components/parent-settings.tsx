@@ -2,8 +2,15 @@
 
 import { useState } from "react";
 import { hashPin } from "@/lib/crypto";
-import { payTaxRefund, setDadMatchMilestones, setParentPinHash, updateParentSettings } from "@/lib/mutations";
-import type { FamilyBankState } from "@/lib/schema";
+import {
+  payTaxRefund,
+  removeKid,
+  setDadMatchMilestones,
+  setParentPinHash,
+  updateKidProfile,
+  updateParentSettings,
+} from "@/lib/mutations";
+import { KID_AVATARS, kidAvatar, type FamilyBankState, type KidProfile } from "@/lib/schema";
 
 const inputClass =
   "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
@@ -103,6 +110,14 @@ export function ParentSettingsPanel({
         </button>
       </form>
 
+      <div className="space-y-3 border-t border-black/10 pt-3 dark:border-white/10">
+        <p className="text-sm opacity-70">Kids</p>
+        {state.kids.length === 0 && <p className="text-xs opacity-60">No kids yet.</p>}
+        {state.kids.map((kid) => (
+          <KidProfileEditor key={kid.id} kid={kid} onMutate={onMutate} />
+        ))}
+      </div>
+
       <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
         <p className="text-sm opacity-70">Tax pots</p>
         <p className="text-xs opacity-60">
@@ -197,6 +212,81 @@ export function ParentSettingsPanel({
         {pinMessage && <p className="text-xs opacity-60">{pinMessage}</p>}
       </form>
     </section>
+  );
+}
+
+function KidProfileEditor({
+  kid,
+  onMutate,
+}: {
+  kid: KidProfile;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(kid.name);
+  const [avatar, setAvatar] = useState(kidAvatar(kid));
+
+  function handleSave(event: React.FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) return;
+    onMutate((s) => updateKidProfile(s, kid.id, { name: name.trim(), avatar }));
+    setEditing(false);
+  }
+
+  function handleRemove() {
+    if (
+      window.confirm(
+        `Remove ${kid.name} and ALL their data (balance, goals, history, investments)? This cannot be undone.`,
+      )
+    ) {
+      onMutate((s) => removeKid(s, kid.id));
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex items-center justify-between text-sm">
+        <span>
+          {kidAvatar(kid)} {kid.name} (age {kid.age})
+        </span>
+        <div className="flex gap-3">
+          <button onClick={() => setEditing(true)} className="text-xs underline opacity-70">
+            Edit
+          </button>
+          <button onClick={handleRemove} className="text-xs text-red-500">
+            Remove
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSave} className="space-y-2 rounded-lg border border-black/10 p-3 dark:border-white/10">
+      <div className="flex flex-wrap gap-1">
+        {KID_AVATARS.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => setAvatar(option)}
+            className={`rounded-lg border-2 p-1 text-xl ${
+              avatar === option ? "border-black dark:border-white" : "border-transparent"
+            }`}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+        <button type="submit" className="rounded-md bg-black px-3 py-2 text-xs text-white dark:bg-white dark:text-black">
+          Save
+        </button>
+        <button type="button" onClick={() => setEditing(false)} className="text-xs opacity-70">
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 

@@ -7,15 +7,28 @@ import {
   availableBalanceForKid,
   claimBounty,
   createGoal,
+  deleteGoal,
+  requestGoalSpend,
   requestWithdrawal,
   totalBalanceForKid,
   updateKidAllowance,
 } from "@/lib/mutations";
-import { SPENDING_CATEGORIES, type Bounty, type FamilyBankState, type KidProfile } from "@/lib/schema";
+import {
+  kidColor,
+  SPENDING_CATEGORIES,
+  YOUNG_KID_MAX_AGE,
+  type Bounty,
+  type FamilyBankState,
+  type KidProfile,
+} from "@/lib/schema";
+import { BadgeWall } from "./badge-wall";
+import { balanceHistory, Sparkline } from "./charts";
 import { InvestmentSandbox } from "./investment-sandbox";
 import type { MarketDataResponse } from "@/lib/market-data";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+type KidTab = "home" | "goals" | "invest" | "bounties" | "ledger";
 
 export function KidDashboard({
   state,
@@ -31,6 +44,7 @@ export function KidDashboard({
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<KidTab>("home");
 
   function tryMutate(mutator: (state: FamilyBankState) => FamilyBankState) {
     try {
@@ -41,6 +55,63 @@ export function KidDashboard({
     }
   }
 
+  if (kid.age <= YOUNG_KID_MAX_AGE) {
+    return (
+      <div className="space-y-6">
+        {error && <p className="text-sm text-red-500">{error}</p>}
+        <YoungKidHome state={state} kid={kid} role={role} onMutate={tryMutate} />
+      </div>
+    );
+  }
+
+  const tabs: { id: KidTab; label: string }[] = [
+    { id: "home", label: "🏠 Home" },
+    { id: "goals", label: "🎯 Goals" },
+    { id: "invest", label: "📈 Invest" },
+    ...(role === "kid" ? [{ id: "bounties" as KidTab, label: "💪 Bounties" }] : []),
+    { id: "ledger", label: "📒 Ledger" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <nav className="flex flex-wrap gap-2">
+        {tabs.map((entry) => (
+          <button
+            key={entry.id}
+            onClick={() => setTab(entry.id)}
+            className={`rounded-full px-3 py-1.5 text-sm ${
+              tab === entry.id
+                ? "bg-black text-white dark:bg-white dark:text-black"
+                : "border border-black/20 dark:border-white/20"
+            }`}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </nav>
+
+      {error && <p className="text-sm text-red-500">{error}</p>}
+
+      {tab === "home" && <HomeTab state={state} kid={kid} role={role} onMutate={tryMutate} />}
+      {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} onMutate={tryMutate} />}
+      {tab === "invest" && <InvestmentSandbox state={state} kid={kid} marketData={marketData} onMutate={tryMutate} />}
+      {tab === "bounties" && role === "kid" && <BountyBoard bounties={state.bounties} kid={kid} onMutate={tryMutate} />}
+      {tab === "ledger" && <Ledger state={state} kid={kid} onMutate={tryMutate} />}
+    </div>
+  );
+}
+
+function HomeTab({
+  state,
+  kid,
+  role,
+  onMutate,
+}: {
+  state: FamilyBankState;
+  kid: KidProfile;
+  role: "parent" | "kid";
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
   const total = totalBalanceForKid(state, kid.id);
   const available = availableBalanceForKid(state, kid.id);
   const days = daysUntilPayday(kid);
@@ -48,17 +119,13 @@ export function KidDashboard({
   const nextMilestone = state.parentSettings.dadMatchMilestones
     .filter((milestone) => milestone.weeks > streakWeeks)
     .sort((a, b) => a.weeks - b.weeks)[0];
-
-  const goals = state.goals.filter((goal) => goal.kidId === kid.id);
-  const transactions = state.transactions.filter((transaction) => transaction.kidId === kid.id);
-  const withdrawalRequests = state.withdrawalRequests.filter((request) => request.kidId === kid.id);
+  const history = balanceHistory(state.transactions.filter((transaction) => transaction.kidId === kid.id));
+  const color = kidColor(kid);
 
   return (
     <div className="space-y-6">
-      {error && <p className="text-sm text-red-500">{error}</p>}
-
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border border-black/10 p-4 dark:border-white/10">
+        <div className="rounded-xl border border-black/10 p-4 dark:border-white/10" style={{ borderTopWidth: 4, borderTopColor: color }}>
           <p className="text-sm opacity-70">Total balance</p>
           <p className="text-3xl font-semibold">{formatCurrency(total)}</p>
           {available !== total && (
@@ -66,19 +133,26 @@ export function KidDashboard({
               {formatCurrency(available)} available (rest saved toward goals or pending approval)
             </p>
           )}
+          <Sparkline values={history} color={color} />
         </div>
         <div className="rounded-xl border border-black/10 p-4 dark:border-white/10">
           <p className="text-sm opacity-70">Allowance</p>
           <p className="text-3xl font-semibold">{formatCurrency(kid.weeklyAllowance)}/wk</p>
-          <p className="text-xs opacity-60">{days === 0 ? "Payday today!" : `Payday in ${days} day${days === 1 ? "" : "s"}`}</p>
-          {role === "parent" && <AllowanceEditor kid={kid} onMutate={tryMutate} />}
+          <p className="text-xs opacity-60">{days === 0 ? "Payday today! 🎉" : `Payday in ${days} day${days === 1 ? "" : "s"}`}</p>
+          <p className="text-xs opacity-60">
+            Plus interest every week — your money earns {formatPercent(state.parentSettings.hysaApr)} a year just by sitting here.
+          </p>
+          {role === "parent" && <AllowanceEditor kid={kid} onMutate={onMutate} />}
         </div>
       </section>
 
       <section className="rounded-xl border border-black/10 p-4 dark:border-white/10">
         <p className="text-sm opacity-70">Dad Match streak</p>
         <p className="text-2xl font-semibold">
-          {streakWeeks} week{streakWeeks === 1 ? "" : "s"} without a withdrawal
+          {"🔥".repeat(Math.min(streakWeeks, 8)) || "—"} {streakWeeks} week{streakWeeks === 1 ? "" : "s"}
+        </p>
+        <p className="text-xs opacity-60">
+          Weeks without an impulse withdrawal. Spending a finished goal never breaks your streak.
         </p>
         {nextMilestone && (
           <p className="text-xs opacity-60">
@@ -88,14 +162,170 @@ export function KidDashboard({
         )}
       </section>
 
-      <GoalGetter goals={goals} available={available} onMutate={tryMutate} kid={kid} />
-
-      <InvestmentSandbox state={state} kid={kid} marketData={marketData} onMutate={tryMutate} />
-
-      {role === "kid" && <BountyBoard bounties={state.bounties} kid={kid} onMutate={tryMutate} />}
-
-      <Ledger transactions={transactions} withdrawalRequests={withdrawalRequests} available={available} onMutate={tryMutate} kid={kid} />
+      <BadgeWall state={state} kid={kid} />
     </div>
+  );
+}
+
+function YoungKidHome({
+  state,
+  kid,
+  role,
+  onMutate,
+}: {
+  state: FamilyBankState;
+  kid: KidProfile;
+  role: "parent" | "kid";
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const total = totalBalanceForKid(state, kid.id);
+  const available = availableBalanceForKid(state, kid.id);
+  const days = daysUntilPayday(kid);
+  const streakWeeks = weeksWithoutWithdrawalFor(state, kid.id);
+  const color = kidColor(kid);
+  const openBounties = state.bounties.filter((bounty) => bounty.status === "open");
+  const recent = state.transactions
+    .filter((transaction) => transaction.kidId === kid.id)
+    .slice()
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, 5);
+
+  return (
+    <div className="space-y-6">
+      <section
+        className="rounded-3xl border-4 p-6 text-center"
+        style={{ borderColor: color, backgroundColor: `${color}14` }}
+      >
+        <p className="text-lg font-semibold">My money</p>
+        <p className="text-6xl font-bold tabular-nums">{formatCurrency(total)}</p>
+        <CoinPile balance={total} />
+        <p className="mt-3 text-lg">
+          {days === 0 ? "💰 Payday is TODAY!" : `💰 ${days} more sleep${days === 1 ? "" : "s"} until payday`}
+        </p>
+      </section>
+
+      <section className="rounded-3xl border border-black/10 p-5 text-center dark:border-white/10">
+        <p className="text-lg font-semibold">My saving streak</p>
+        <p className="mt-1 text-4xl">{"⭐".repeat(Math.min(Math.max(streakWeeks, 0), 10)) || "🌱"}</p>
+        <p className="mt-1 text-sm opacity-70">
+          {streakWeeks === 0 ? "A new streak is growing!" : `${streakWeeks} week${streakWeeks === 1 ? "" : "s"} of saving!`}
+        </p>
+      </section>
+
+      <GoalGetter state={state} kid={kid} role={role} onMutate={onMutate} young />
+
+      {openBounties.length > 0 && role === "kid" && (
+        <section className="space-y-3 rounded-3xl border border-black/10 p-5 dark:border-white/10">
+          <p className="text-lg font-semibold">💪 Jobs for extra money</p>
+          {openBounties.map((bounty) => (
+            <button
+              key={bounty.id}
+              onClick={() => onMutate((s) => claimBounty(s, bounty.id, kid.id))}
+              className="flex w-full items-center justify-between rounded-2xl border-2 border-black/15 p-4 text-left text-base dark:border-white/20"
+            >
+              <span>{bounty.title}</span>
+              <span className="font-bold text-green-600">{formatCurrency(bounty.reward)}</span>
+            </button>
+          ))}
+        </section>
+      )}
+
+      <YoungSpendForm kid={kid} available={available} onMutate={onMutate} />
+
+      {recent.length > 0 && (
+        <section className="space-y-2 rounded-3xl border border-black/10 p-5 dark:border-white/10">
+          <p className="text-lg font-semibold">What happened</p>
+          {recent.map((transaction) => (
+            <div key={transaction.id} className="flex items-center justify-between text-base">
+              <span>
+                {transaction.category} {transaction.memo ?? ""}
+              </span>
+              <span className={transaction.amount < 0 ? "text-red-500" : "text-green-600"}>
+                {transaction.amount < 0 ? "-" : "+"}
+                {formatCurrency(Math.abs(transaction.amount))}
+              </span>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {role === "parent" && <AllowanceEditor kid={kid} onMutate={onMutate} />}
+    </div>
+  );
+}
+
+/** Renders whole dollars as a pile of coins so the amount is something a 6-year-old can *see*. */
+function CoinPile({ balance }: { balance: number }) {
+  const coins = Math.min(Math.floor(balance), 30);
+  const extra = Math.floor(balance) - coins;
+  if (coins <= 0) return null;
+  return (
+    <p className="mx-auto mt-2 max-w-xs text-2xl leading-7" aria-label={`${Math.floor(balance)} dollars`}>
+      {"🪙".repeat(coins)}
+      {extra > 0 && <span className="text-sm opacity-70"> +{extra} more</span>}
+    </p>
+  );
+}
+
+function YoungSpendForm({
+  kid,
+  available,
+  onMutate,
+}: {
+  kid: KidProfile;
+  available: number;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const [category, setCategory] = useState<string>(SPENDING_CATEGORIES[0].emoji);
+  const [amount, setAmount] = useState("");
+  const [asked, setAsked] = useState(false);
+
+  function handleAsk(event: React.FormEvent) {
+    event.preventDefault();
+    if (!amount) return;
+    onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category));
+    setAmount("");
+    setAsked(true);
+  }
+
+  return (
+    <section className="space-y-3 rounded-3xl border border-black/10 p-5 dark:border-white/10">
+      <p className="text-lg font-semibold">🙋 Ask to spend</p>
+      <div className="flex flex-wrap gap-2">
+        {SPENDING_CATEGORIES.map((entry) => (
+          <button
+            key={entry.emoji}
+            type="button"
+            onClick={() => setCategory(entry.emoji)}
+            className={`rounded-2xl border-2 p-3 text-3xl ${
+              category === entry.emoji ? "border-black dark:border-white" : "border-black/10 dark:border-white/15"
+            }`}
+            aria-label={entry.label}
+          >
+            {entry.emoji}
+          </button>
+        ))}
+      </div>
+      <form onSubmit={handleAsk} className="flex gap-2">
+        <input
+          value={amount}
+          onChange={(event) => setAmount(event.target.value)}
+          type="number"
+          min={0.01}
+          step="0.01"
+          placeholder="How much?"
+          className="w-32 rounded-2xl border-2 border-black/15 px-4 py-3 text-lg dark:border-white/20 dark:bg-transparent"
+        />
+        <button
+          type="submit"
+          disabled={available <= 0}
+          className="flex-1 rounded-2xl bg-black px-4 py-3 text-lg font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-black"
+        >
+          Ask Dad
+        </button>
+      </form>
+      {asked && <p className="text-sm text-green-600">Sent! Dad will say yes or no. 🕐</p>}
+    </section>
   );
 }
 
@@ -156,63 +386,92 @@ function AllowanceEditor({
 }
 
 function GoalGetter({
-  goals,
-  available,
+  state,
   kid,
+  role,
+  young = false,
   onMutate,
 }: {
-  goals: FamilyBankState["goals"];
-  available: number;
+  state: FamilyBankState;
   kid: KidProfile;
+  role: "parent" | "kid";
+  young?: boolean;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
+  const available = availableBalanceForKid(state, kid.id);
+  const goals = state.goals.filter((goal) => goal.kidId === kid.id && !goal.spentAt);
+  const step = young ? 1 : 5;
+  const netWeekly = kid.weeklyAllowance * (1 - state.parentSettings.taxRate);
 
   function handleCreate(event: React.FormEvent) {
     event.preventDefault();
     if (!name.trim() || !target) return;
-    onMutate((state) => createGoal(state, kid.id, name.trim(), Number(target)));
+    onMutate((s) => createGoal(s, kid.id, name.trim(), Number(target)));
     setName("");
     setTarget("");
   }
 
   return (
-    <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
-      <h2 className="font-semibold">Goal Getter</h2>
+    <section className={`space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10 ${young ? "rounded-3xl p-5" : ""}`}>
+      <h2 className={young ? "text-lg font-semibold" : "font-semibold"}>🎯 Goal Getter</h2>
 
       {goals.length === 0 && <p className="text-sm opacity-70">No goals yet — start saving for something!</p>}
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         {goals.map((goal) => {
           const progress = Math.min(100, Math.round((goal.savedAmount / goal.targetAmount) * 100));
+          const remaining = goal.targetAmount - goal.savedAmount;
+          const etaWeeks = !goal.completedAt && netWeekly > 0 ? Math.ceil(remaining / netWeekly) : null;
+          const pendingSpend = state.withdrawalRequests.some(
+            (request) => request.goalId === goal.id && request.status === "pending",
+          );
           return (
             <div key={goal.id} className="space-y-1">
               <div className="flex items-center justify-between text-sm">
-                <span>{goal.name}</span>
+                <span className={young ? "text-base" : ""}>{goal.name}</span>
                 <span className="opacity-70">
                   {formatCurrency(goal.savedAmount)} / {formatCurrency(goal.targetAmount)}
                 </span>
               </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
-                <div className="h-full rounded-full bg-green-500" style={{ width: `${progress}%` }} />
+              <div className={`w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10 ${young ? "h-4" : "h-2"}`}>
+                <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${progress}%` }} />
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => onMutate((state) => allocateToGoal(state, goal.id, Math.min(5, available)))}
-                  className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
-                  disabled={available <= 0}
-                >
-                  + $5
-                </button>
-                <button
-                  onClick={() => onMutate((state) => allocateToGoal(state, goal.id, -Math.min(5, goal.savedAmount)))}
-                  className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
-                  disabled={goal.savedAmount <= 0}
-                >
-                  - $5
-                </button>
-                {goal.completedAt && <span className="text-xs text-green-600">Goal reached! 🎉</span>}
+              {etaWeeks !== null && etaWeeks > 0 && (
+                <p className="text-xs opacity-60">
+                  ~{etaWeeks} week{etaWeeks === 1 ? "" : "s"} to go at allowance pace
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                {!goal.completedAt && (
+                  <>
+                    <button
+                      onClick={() => onMutate((s) => allocateToGoal(s, goal.id, Math.min(step, available)))}
+                      className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
+                      disabled={available <= 0}
+                    >
+                      + ${step}
+                    </button>
+                    <button
+                      onClick={() => onMutate((s) => allocateToGoal(s, goal.id, -Math.min(step, goal.savedAmount)))}
+                      className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
+                      disabled={goal.savedAmount <= 0}
+                    >
+                      - ${step}
+                    </button>
+                  </>
+                )}
+                {goal.completedAt && pendingSpend && <span className="text-xs opacity-70">Asked Dad — waiting 🕐</span>}
+                {goal.completedAt && !pendingSpend && (
+                  <button
+                    onClick={() => onMutate((s) => requestGoalSpend(s, goal.id))}
+                    className={`rounded-md bg-green-600 text-white ${young ? "px-4 py-2 text-base" : "px-3 py-1 text-xs"}`}
+                  >
+                    Spend it! 🎉
+                  </button>
+                )}
+                {role === "parent" && !goal.completedAt && <DeleteGoalButton goalId={goal.id} onMutate={onMutate} />}
               </div>
             </div>
           );
@@ -224,7 +483,7 @@ function GoalGetter({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="What are you saving for?"
-          className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent"
+          className={`rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent ${young ? "rounded-2xl py-3 text-base" : ""}`}
         />
         <input
           value={target}
@@ -233,13 +492,37 @@ function GoalGetter({
           min={1}
           step="0.01"
           placeholder="Target ($)"
-          className="w-32 rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent"
+          className={`w-32 rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent ${young ? "rounded-2xl py-3 text-base" : ""}`}
         />
-        <button type="submit" className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">
+        <button
+          type="submit"
+          className={`rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black ${young ? "rounded-2xl py-3 text-base" : ""}`}
+        >
           Create goal
         </button>
       </form>
     </section>
+  );
+}
+
+function DeleteGoalButton({
+  goalId,
+  onMutate,
+}: {
+  goalId: string;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  return (
+    <button
+      onClick={() => {
+        if (window.confirm("Delete this goal? Saved money returns to the available balance.")) {
+          onMutate((s) => deleteGoal(s, goalId));
+        }
+      }}
+      className="ml-auto text-xs text-red-500"
+    >
+      Delete
+    </button>
   );
 }
 
@@ -257,7 +540,7 @@ function BountyBoard({
 
   return (
     <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
-      <h2 className="font-semibold">Bounty Board</h2>
+      <h2 className="font-semibold">💪 Bounty Board</h2>
 
       {open.length === 0 && <p className="text-sm opacity-70">No open bounties right now.</p>}
       <div className="space-y-2">
@@ -305,21 +588,21 @@ function bountyStatusLabel(status: Bounty["status"]): string {
 }
 
 function Ledger({
-  transactions,
-  withdrawalRequests,
-  available,
+  state,
   kid,
   onMutate,
 }: {
-  transactions: FamilyBankState["transactions"];
-  withdrawalRequests: FamilyBankState["withdrawalRequests"];
-  available: number;
+  state: FamilyBankState;
   kid: KidProfile;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<string>(SPENDING_CATEGORIES[0].emoji);
   const [memo, setMemo] = useState("");
+
+  const available = availableBalanceForKid(state, kid.id);
+  const transactions = state.transactions.filter((transaction) => transaction.kidId === kid.id);
+  const withdrawalRequests = state.withdrawalRequests.filter((request) => request.kidId === kid.id);
 
   function handleRequest(event: React.FormEvent) {
     event.preventDefault();
@@ -342,7 +625,7 @@ function Ledger({
 
   return (
     <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
-      <h2 className="font-semibold">Ledger</h2>
+      <h2 className="font-semibold">📒 Ledger</h2>
 
       <form onSubmit={handleRequest} className="flex flex-wrap gap-2">
         <select
@@ -422,4 +705,8 @@ function sourceLabel(source: string): string {
 
 function formatCurrency(amount: number): string {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+function formatPercent(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`;
 }

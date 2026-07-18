@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { approveBounty, approveWithdrawal, createBounty, denyBounty, denyWithdrawal } from "@/lib/mutations";
+import { approveBounty, approveWithdrawal, createBounty, deleteBounty, denyBounty, denyWithdrawal } from "@/lib/mutations";
 import type { FamilyBankState } from "@/lib/schema";
 
 const inputClass =
@@ -108,7 +108,12 @@ export function ApprovalQueue({
         {openBounties.map((bounty) => (
           <div key={bounty.id} className="flex items-center justify-between text-sm">
             <span>{bounty.title}</span>
-            <span className="opacity-70">{formatCurrency(bounty.reward)}</span>
+            <div className="flex items-center gap-3">
+              <span className="opacity-70">{formatCurrency(bounty.reward)}</span>
+              <button onClick={() => tryMutate((s) => deleteBounty(s, bounty.id))} className="text-xs text-red-500">
+                Remove
+              </button>
+            </div>
           </div>
         ))}
         <form onSubmit={handleCreateBounty} className="flex flex-wrap gap-2 pt-1">

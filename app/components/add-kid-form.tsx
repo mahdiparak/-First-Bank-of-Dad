@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { KID_AVATARS } from "@/lib/schema";
 
 export interface AddKidFormValues {
   name: string;
   age: number;
   weeklyAllowance: number;
   paydayWeekday: number;
+  avatar: string;
 }
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -16,6 +18,7 @@ export function AddKidForm({ onSubmit }: { onSubmit: (values: AddKidFormValues) 
   const [age, setAge] = useState("");
   const [weeklyAllowance, setWeeklyAllowance] = useState("");
   const [paydayWeekday, setPaydayWeekday] = useState("5");
+  const [avatar, setAvatar] = useState<string>(KID_AVATARS[0]);
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -25,6 +28,7 @@ export function AddKidForm({ onSubmit }: { onSubmit: (values: AddKidFormValues) 
       age: Number(age),
       weeklyAllowance: Number(weeklyAllowance),
       paydayWeekday: Number(paydayWeekday),
+      avatar,
     });
     setName("");
     setAge("");
@@ -34,6 +38,21 @@ export function AddKidForm({ onSubmit }: { onSubmit: (values: AddKidFormValues) 
   return (
     <form onSubmit={handleSubmit} className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
       <h2 className="font-semibold">Add a kid</h2>
+      <div className="flex flex-wrap gap-2">
+        {KID_AVATARS.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => setAvatar(option)}
+            className={`rounded-xl border-2 p-2 text-2xl ${
+              avatar === option ? "border-black dark:border-white" : "border-black/10 dark:border-white/15"
+            }`}
+            aria-label={`Avatar ${option}`}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
       <div className="flex flex-wrap gap-3">
         <input
           value={name}
@@ -70,6 +89,7 @@ export function AddKidForm({ onSubmit }: { onSubmit: (values: AddKidFormValues) 
           ))}
         </select>
       </div>
+      <p className="text-xs opacity-60">Kids age 7 and under get the big, picture-first version of the app.</p>
       <button type="submit" className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">
         Add kid
       </button>

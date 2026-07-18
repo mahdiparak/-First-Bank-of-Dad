@@ -4,6 +4,7 @@ import { useState } from "react";
 import { simulateWhatIf, type WhatIfResult } from "@/lib/investment-engine";
 import type { MarketDataResponse } from "@/lib/market-data";
 import { ASSET_CLASSES, type AssetClass } from "@/lib/schema";
+import { WhatIfChart } from "./charts";
 
 const ASSET_CLASS_ORDER: AssetClass[] = ["savings", "cd", "stocks", "crypto"];
 
@@ -18,9 +19,11 @@ export function WhatIfSimulator({
   const [principal, setPrincipal] = useState("100");
   const [weeks, setWeeks] = useState("52");
   const [result, setResult] = useState<WhatIfResult | null>(null);
+  const [ranPrincipal, setRanPrincipal] = useState(100);
 
   function handleRun(event: React.FormEvent) {
     event.preventDefault();
+    setRanPrincipal(Number(principal));
     setResult(simulateWhatIf(assetClass, Number(principal), Number(weeks), parentSettings, marketData));
   }
 
@@ -66,6 +69,12 @@ export function WhatIfSimulator({
         </button>
       </form>
 
+      {result && (
+        <>
+          <WhatIfChart values={[ranPrincipal, ...result.values]} principal={ranPrincipal} />
+          <p className="text-xs opacity-50">The dashed line is where you started. Every wiggle is one month.</p>
+        </>
+      )}
       {result && (
         <div className="grid grid-cols-3 gap-3 text-sm">
           <div>

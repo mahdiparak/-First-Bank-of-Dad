@@ -1,19 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AddKidForm, type AddKidFormValues } from "@/components/add-kid-form";
 import { ApprovalQueue } from "@/components/approval-queue";
+import { CelebrationOverlay } from "@/components/celebration-overlay";
 import { KidDashboard } from "@/components/kid-dashboard";
 import { MarketDataSettings } from "@/components/market-data-settings";
+import { MoneyTalk } from "@/components/money-talk";
 import { ParentSettingsPanel } from "@/components/parent-settings";
 import { ReconciliationPanel } from "@/components/reconciliation-panel";
 import { ParentLoginPrompt, RoleChooser } from "@/components/role-gate";
 import { runScheduledEngines } from "@/lib/allowance";
+import { diffCelebrations, type CelebrationEvent } from "@/lib/celebrations";
 import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
 import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
-import { createEmptyState, type FamilyBankState } from "@/lib/schema";
+import { createEmptyState, kidAvatar, kidColor, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
   getOrCreateDeviceId,
@@ -35,6 +38,7 @@ import { SyncClient, type SyncMutation, type SyncStatus } from "@/lib/sync";
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "";
 
 type Phase = "loading" | "enter-phrase" | "ready";
+type ParentTab = "kids" | "approvals" | "money" | "talk" | "settings";
 
 function primeState(loaded: FamilyBankState | null): FamilyBankState | null {
   if (!loaded) return null;
@@ -59,6 +63,7 @@ export default function Home() {
   const [phraseError, setPhraseError] = useState<string | null>(null);
   const [state, setState] = useState<FamilyBankState | null>(null);
   const [selectedKidId, setSelectedKidId] = useState<string | null>(null);
+  const [parentTab, setParentTab] = useState<ParentTab>("kids");
   const [deviceRole, setDeviceRole] = useState<DeviceRole | null>(null);
   const [deviceKidId, setDeviceKidId] = useState<string | null>(null);
   const [showParentLogin, setShowParentLogin] = useState(false);
@@ -66,11 +71,13 @@ export default function Home() {
   const [importError, setImportError] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<MarketDataResponse | null>(null);
   const [marketDataLoaded, setMarketDataLoaded] = useState(false);
+  const [celebrations, setCelebrations] = useState<CelebrationEvent[]>([]);
 
   const roomIdRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
   const deviceRoleRef = useRef<DeviceRole | null>(null);
   const syncClientRef = useRef<SyncClient | null>(null);
+  const prevStateRef = useRef<FamilyBankState | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -92,6 +99,9 @@ export default function Home() {
       }
 
       roomIdRef.current = roomId;
+      // Seed the celebration diff with the raw stored state, so anything the
+      // engines pay out on this load (payday, interest, Dad Match) celebrates.
+      prevStateRef.current = storedState;
       const primed = primeState(storedState);
       setState(primed);
       if (primed) {
@@ -122,6 +132,16 @@ export default function Home() {
     if (updated !== state) commitState(updated);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, marketDataLoaded, marketData]);
+
+  // Every state transition (local mutation, engine catch-up, incoming sync) flows
+  // through here once, so celebrations fire no matter where the change came from.
+  useEffect(() => {
+    if (state) {
+      const events = diffCelebrations(prevStateRef.current, state);
+      if (events.length > 0) setCelebrations((queue) => [...queue, ...events].slice(-20));
+    }
+    prevStateRef.current = state;
+  }, [state]);
 
   function startSync(key: CryptoKey, roomId: string) {
     if (!RELAY_URL) {
@@ -173,6 +193,7 @@ export default function Home() {
     setPhraseInput("");
 
     const existing = await loadState();
+    prevStateRef.current = existing;
     const primed = primeState(existing);
     setState(primed);
     if (primed) {
@@ -250,14 +271,19 @@ export default function Home() {
     void saveDeviceKidId(kidId);
   }
 
-  function handleEnterKidView(kidId: string) {
-    handleChooseKidRole(kidId);
-  }
-
   function handleParentLoginSuccess() {
     setShowParentLogin(false);
     handleChooseParentRole();
   }
+
+  const activeCelebration =
+    deviceRole === "kid" && deviceKidId
+      ? (celebrations.find((event) => event.kidId === deviceKidId) ?? null)
+      : null;
+
+  const dismissCelebration = useCallback(() => {
+    setCelebrations((queue) => (activeCelebration ? queue.filter((event) => event.id !== activeCelebration.id) : queue));
+  }, [activeCelebration]);
 
   if (phase === "loading") {
     return <CenteredMessage text="Loading…" />;
@@ -313,8 +339,11 @@ export default function Home() {
     const kid = state.kids.find((candidate) => candidate.id === deviceKidId);
     return (
       <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
+        {activeCelebration && <CelebrationOverlay event={activeCelebration} onDismiss={dismissCelebration} />}
         <header className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">{kid ? `${kid.name}'s Bank` : "First Bank of Dad"}</h1>
+          <h1 className="text-xl font-semibold">
+            {kid ? `${kidAvatar(kid)} ${kid.name}'s Bank` : "First Bank of Dad"}
+          </h1>
           <SyncBadge status={syncStatus} />
         </header>
 
@@ -340,6 +369,19 @@ export default function Home() {
       </main>
     );
   }
+
+  const parentTabs: { id: ParentTab; label: string }[] = [
+    { id: "kids", label: "👨‍👧‍👦 Kids" },
+    { id: "approvals", label: "✅ Approvals" },
+    { id: "money", label: "🏦 Money" },
+    { id: "talk", label: "💬 Money Talk" },
+    { id: "settings", label: "⚙️ Settings" },
+  ];
+
+  const pendingCount = state
+    ? state.withdrawalRequests.filter((request) => request.status === "pending").length +
+      state.bounties.filter((bounty) => bounty.status === "pending-approval").length
+    : 0;
 
   return (
     <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
@@ -371,67 +413,101 @@ export default function Home() {
         </section>
       ) : (
         <>
-          {state.kids.length > 0 && (
-            <nav className="flex flex-wrap gap-2">
-              {state.kids.map((kid) => (
-                <button
-                  key={kid.id}
-                  onClick={() => setSelectedKidId(kid.id)}
-                  className={`rounded-full px-3 py-1.5 text-sm ${
-                    kid.id === effectiveSelectedKidId
-                      ? "bg-black text-white dark:bg-white dark:text-black"
-                      : "border border-black/20 dark:border-white/20"
-                  }`}
-                >
-                  {kid.name}
-                </button>
-              ))}
-            </nav>
-          )}
-
-          {selectedKid ? (
-            <>
-              <KidDashboard state={state} kid={selectedKid} role="parent" marketData={marketData} onMutate={handleMutate} />
+          <nav className="flex flex-wrap gap-2">
+            {parentTabs.map((entry) => (
               <button
-                onClick={() => handleEnterKidView(selectedKid.id)}
-                className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+                key={entry.id}
+                onClick={() => setParentTab(entry.id)}
+                className={`rounded-full px-3 py-1.5 text-sm ${
+                  parentTab === entry.id
+                    ? "bg-black text-white dark:bg-white dark:text-black"
+                    : "border border-black/20 dark:border-white/20"
+                }`}
               >
-                Enter {selectedKid.name}&apos;s Kid View
+                {entry.label}
+                {entry.id === "approvals" && pendingCount > 0 && (
+                  <span className="ml-1 rounded-full bg-red-500 px-1.5 text-xs text-white">{pendingCount}</span>
+                )}
               </button>
+            ))}
+          </nav>
+
+          {parentTab === "kids" && (
+            <>
+              {state.kids.length > 0 && (
+                <nav className="flex flex-wrap gap-2">
+                  {state.kids.map((kid) => (
+                    <button
+                      key={kid.id}
+                      onClick={() => setSelectedKidId(kid.id)}
+                      className="rounded-full border-2 px-3 py-1.5 text-sm"
+                      style={
+                        kid.id === effectiveSelectedKidId
+                          ? { borderColor: kidColor(kid), backgroundColor: `${kidColor(kid)}22` }
+                          : { borderColor: "transparent", backgroundColor: "rgba(127,127,127,0.1)" }
+                      }
+                    >
+                      {kidAvatar(kid)} {kid.name}
+                    </button>
+                  ))}
+                </nav>
+              )}
+
+              {selectedKid ? (
+                <>
+                  <KidDashboard
+                    state={state}
+                    kid={selectedKid}
+                    role="parent"
+                    marketData={marketData}
+                    onMutate={handleMutate}
+                  />
+                  <button
+                    onClick={() => handleChooseKidRole(selectedKid.id)}
+                    className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+                  >
+                    Enter {selectedKid.name}&apos;s Kid View
+                  </button>
+                </>
+              ) : (
+                <p className="text-sm opacity-70">Add a kid below to get started.</p>
+              )}
+
+              <AddKidForm onSubmit={handleAddKid} />
             </>
-          ) : (
-            <p className="text-sm opacity-70">Add a kid below to get started.</p>
           )}
 
-          <AddKidForm onSubmit={handleAddKid} />
+          {parentTab === "approvals" && <ApprovalQueue state={state} onMutate={handleMutate} />}
 
-          <ApprovalQueue state={state} onMutate={handleMutate} />
+          {parentTab === "money" && <ReconciliationPanel state={state} onMutate={handleMutate} />}
 
-          <ReconciliationPanel state={state} onMutate={handleMutate} />
+          {parentTab === "talk" && <MoneyTalk state={state} />}
 
-          <ParentSettingsPanel state={state} onMutate={handleMutate} />
-
-          <MarketDataSettings marketData={marketData} onMarketDataRefreshed={setMarketData} />
-
-          <section className="flex flex-wrap gap-3">
-            <button
-              onClick={() => exportStateToFile(state)}
-              className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
-            >
-              Export backup JSON
-            </button>
-            <label className="cursor-pointer rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20">
-              Import backup JSON
-              <input type="file" accept="application/json" className="hidden" onChange={handleImport} />
-            </label>
-            <button
-              onClick={() => void broadcastSnapshot(state)}
-              className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
-            >
-              Sync now
-            </button>
-          </section>
-          {importError && <p className="text-sm text-red-500">{importError}</p>}
+          {parentTab === "settings" && (
+            <>
+              <ParentSettingsPanel state={state} onMutate={handleMutate} />
+              <MarketDataSettings marketData={marketData} onMarketDataRefreshed={setMarketData} />
+              <section className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => exportStateToFile(state)}
+                  className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+                >
+                  Export backup JSON
+                </button>
+                <label className="cursor-pointer rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20">
+                  Import backup JSON
+                  <input type="file" accept="application/json" className="hidden" onChange={handleImport} />
+                </label>
+                <button
+                  onClick={() => void broadcastSnapshot(state)}
+                  className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
+                >
+                  Sync now
+                </button>
+              </section>
+              {importError && <p className="text-sm text-red-500">{importError}</p>}
+            </>
+          )}
         </>
       )}
     </main>
@@ -442,14 +518,14 @@ function SyncBadge({ status }: { status: SyncStatus }) {
   const labels: Record<SyncStatus, string> = {
     connecting: "Connecting…",
     open: "Synced",
-    closed: "Offline",
-    error: "Sync error",
+    closed: "Offline — saved on this device",
+    error: "Offline — saved on this device",
   };
   const colors: Record<SyncStatus, string> = {
     connecting: "bg-yellow-500",
     open: "bg-green-500",
     closed: "bg-gray-400",
-    error: "bg-red-500",
+    error: "bg-gray-400",
   };
   return (
     <span className="flex items-center gap-2 text-sm opacity-70">

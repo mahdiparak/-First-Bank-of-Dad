@@ -6,6 +6,29 @@ export interface KidProfile {
   paydayWeekday: number; // 0 = Sunday ... 6 = Saturday
   createdAt: string;
   lastAllowancePaidAt?: string;
+  lastInterestPaidAt?: string;
+  avatar?: string; // emoji
+  color?: string; // hex accent color
+}
+
+/** Kids under this age get the simplified, picture-first UI. */
+export const YOUNG_KID_MAX_AGE = 7;
+
+export const KID_AVATARS = ["🦁", "🐯", "🦊", "🐼", "🐸", "🦄", "🐙", "🦖"] as const;
+export const KID_COLORS = ["#f59e0b", "#10b981", "#3b82f6", "#ec4899", "#8b5cf6", "#ef4444", "#14b8a6", "#f97316"] as const;
+
+export function kidAvatar(kid: KidProfile): string {
+  return kid.avatar ?? KID_AVATARS[hashIndex(kid.id, KID_AVATARS.length)];
+}
+
+export function kidColor(kid: KidProfile): string {
+  return kid.color ?? KID_COLORS[hashIndex(kid.id, KID_COLORS.length)];
+}
+
+function hashIndex(id: string, modulo: number): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(hash) % modulo;
 }
 
 export type TransactionSource =
@@ -16,7 +39,8 @@ export type TransactionSource =
   | "manual-deposit"
   | "manual-withdrawal"
   | "goal"
-  | "investment";
+  | "investment"
+  | "interest";
 
 export interface Transaction {
   id: string;
@@ -36,6 +60,8 @@ export interface SavingsGoal {
   savedAmount: number;
   createdAt: string;
   completedAt?: string;
+  /** Set once the goal's money was actually spent (via an approved goal-spend request). */
+  spentAt?: string;
 }
 
 export type BountyStatus =
@@ -106,6 +132,12 @@ export interface WithdrawalRequest {
   status: WithdrawalStatus;
   requestedAt: string;
   resolvedAt?: string;
+  /**
+   * Set when this is a "spend my completed goal" request. Approving it spends the goal's
+   * earmarked money and — deliberately — does NOT reset the Dad Match streak: planned
+   * spending toward a goal is the behavior we celebrate, not punish.
+   */
+  goalId?: string;
 }
 
 export interface CashAdjustment {

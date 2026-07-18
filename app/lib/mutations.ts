@@ -1,4 +1,4 @@
-import type { AssetClass, DadMatchMilestone, FamilyBankState, KidProfile, ParentSettings, TransactionSource } from "./schema";
+import { KID_COLORS, type AssetClass, type DadMatchMilestone, type FamilyBankState, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
 
 function touch(state: FamilyBankState): FamilyBankState {
   return { ...state, updatedAt: new Date().toISOString() };
@@ -18,7 +18,8 @@ export function savedTowardGoalsForKid(state: FamilyBankState, kidId: string): n
 
 export function pendingWithdrawalsForKid(state: FamilyBankState, kidId: string): number {
   return state.withdrawalRequests
-    .filter((request) => request.kidId === kidId && request.status === "pending")
+    // Goal-spend requests are excluded: that money is already earmarked by the goal itself.
+    .filter((request) => request.kidId === kidId && request.status === "pending" && !request.goalId)
     .reduce((total, request) => total + request.amount, 0);
 }
 
@@ -31,11 +32,12 @@ export function availableBalanceForKid(state: FamilyBankState, kidId: string): n
 
 export function addKid(
   state: FamilyBankState,
-  input: { name: string; age: number; weeklyAllowance: number; paydayWeekday: number },
+  input: { name: string; age: number; weeklyAllowance: number; paydayWeekday: number; avatar?: string },
 ): FamilyBankState {
   const kid: KidProfile = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
+    color: KID_COLORS[state.kids.length % KID_COLORS.length],
     ...input,
   };
   return touch({
@@ -101,6 +103,38 @@ export function requestWithdrawal(
   });
 }
 
+/**
+ * Kid-side: asks to spend a completed goal's saved money. Approval spends the earmark and
+ * deliberately does NOT reset the Dad Match streak — planned spending is the win condition,
+ * not a failure.
+ */
+export function requestGoalSpend(state: FamilyBankState, goalId: string): FamilyBankState {
+  const goal = state.goals.find((candidate) => candidate.id === goalId);
+  if (!goal) throw new Error("Goal not found.");
+  if (!goal.completedAt || goal.spentAt) throw new Error("This goal isn't ready to spend.");
+  if (goal.savedAmount <= 0) throw new Error("Nothing saved in this goal.");
+  if (state.withdrawalRequests.some((request) => request.goalId === goalId && request.status === "pending")) {
+    throw new Error("Already asked — waiting for Dad.");
+  }
+
+  return touch({
+    ...state,
+    withdrawalRequests: [
+      ...state.withdrawalRequests,
+      {
+        id: crypto.randomUUID(),
+        kidId: goal.kidId,
+        amount: goal.savedAmount,
+        category: "🎯",
+        reason: `Goal: ${goal.name}`,
+        status: "pending",
+        requestedAt: new Date().toISOString(),
+        goalId,
+      },
+    ],
+  });
+}
+
 /** Parent-side: approves a pending withdrawal, which is what actually debits the kid's balance. */
 export function approveWithdrawal(state: FamilyBankState, requestId: string): FamilyBankState {
   const request = state.withdrawalRequests.find((candidate) => candidate.id === requestId);
@@ -118,9 +152,17 @@ export function approveWithdrawal(state: FamilyBankState, requestId: string): Fa
 
   return {
     ...withTransaction,
-    streaks: withTransaction.streaks.map((streak) =>
-      streak.kidId === request.kidId ? { ...streak, lastWithdrawalAt: now } : streak,
-    ),
+    // A goal-spend is planned spending: it releases the goal's earmark and leaves the streak intact.
+    streaks: request.goalId
+      ? withTransaction.streaks
+      : withTransaction.streaks.map((streak) =>
+          streak.kidId === request.kidId ? { ...streak, lastWithdrawalAt: now } : streak,
+        ),
+    goals: request.goalId
+      ? withTransaction.goals.map((goal) =>
+          goal.id === request.goalId ? { ...goal, savedAmount: 0, spentAt: now } : goal,
+        )
+      : withTransaction.goals,
     withdrawalRequests: withTransaction.withdrawalRequests.map((candidate) =>
       candidate.id === requestId ? { ...candidate, status: "approved", resolvedAt: now } : candidate,
     ),
@@ -201,6 +243,52 @@ export function updateKidAllowance(
     ...state,
     kids: state.kids.map((kid) => (kid.id === kidId ? { ...kid, weeklyAllowance, paydayWeekday } : kid)),
   });
+}
+
+/** Parent-only: rename a kid or change their avatar/color. */
+export function updateKidProfile(
+  state: FamilyBankState,
+  kidId: string,
+  patch: { name?: string; avatar?: string; color?: string; age?: number },
+): FamilyBankState {
+  return touch({
+    ...state,
+    kids: state.kids.map((kid) => (kid.id === kidId ? { ...kid, ...patch } : kid)),
+  });
+}
+
+/** Parent-only: removes a kid and everything tied to them. Irreversible — the UI must confirm. */
+export function removeKid(state: FamilyBankState, kidId: string): FamilyBankState {
+  return touch({
+    ...state,
+    kids: state.kids.filter((kid) => kid.id !== kidId),
+    transactions: state.transactions.filter((transaction) => transaction.kidId !== kidId),
+    goals: state.goals.filter((goal) => goal.kidId !== kidId),
+    streaks: state.streaks.filter((streak) => streak.kidId !== kidId),
+    taxPots: state.taxPots.filter((pot) => pot.kidId !== kidId),
+    investments: state.investments.filter((position) => position.kidId !== kidId),
+    withdrawalRequests: state.withdrawalRequests.filter((request) => request.kidId !== kidId),
+    bounties: state.bounties.map((bounty) =>
+      bounty.claimedByKidId === kidId && bounty.status === "pending-approval"
+        ? { ...bounty, status: "open" as const, claimedByKidId: undefined, claimedAt: undefined }
+        : bounty,
+    ),
+  });
+}
+
+/** Deletes a goal; any earmarked money automatically returns to the available balance. */
+export function deleteGoal(state: FamilyBankState, goalId: string): FamilyBankState {
+  if (state.withdrawalRequests.some((request) => request.goalId === goalId && request.status === "pending")) {
+    throw new Error("A spend request for this goal is waiting for approval.");
+  }
+  return touch({ ...state, goals: state.goals.filter((goal) => goal.id !== goalId) });
+}
+
+/** Parent-only: removes an open (unclaimed) bounty from the board. */
+export function deleteBounty(state: FamilyBankState, bountyId: string): FamilyBankState {
+  const bounty = state.bounties.find((candidate) => candidate.id === bountyId);
+  if (!bounty || bounty.status !== "open") throw new Error("Only open bounties can be removed.");
+  return touch({ ...state, bounties: state.bounties.filter((candidate) => candidate.id !== bountyId) });
 }
 
 /** Parent-only: the HYSA/CD rates, Family Tax rate, and Dad Match milestones. */

@@ -61,6 +61,44 @@ function processAllowanceForKid(state: FamilyBankState, kid: KidProfile, now: Da
   return working;
 }
 
+function balanceAt(state: FamilyBankState, kidId: string, at: Date): number {
+  const atIso = at.toISOString();
+  return state.transactions
+    .filter((transaction) => transaction.kidId === kidId && transaction.createdAt <= atIso)
+    .reduce((total, transaction) => total + transaction.amount, 0);
+}
+
+/**
+ * Pays weekly interest on the kid's whole cash balance at the parent-set HYSA rate — mirroring
+ * how a real HYSA pays on everything you hold, so interest is something that visibly *happens*
+ * to the kid rather than an opt-in menu item.
+ */
+function processInterestForKid(state: FamilyBankState, kid: KidProfile, now: Date): FamilyBankState {
+  let working = state;
+  let due = kid.lastInterestPaidAt
+    ? new Date(new Date(kid.lastInterestPaidAt).getTime() + WEEK_MS)
+    : new Date(startOfDay(new Date(kid.createdAt)).getTime() + WEEK_MS);
+  let payments = 0;
+
+  while (due.getTime() <= now.getTime() && payments < MAX_CATCH_UP_PAYMENTS) {
+    const balance = balanceAt(working, kid.id, due);
+    const interest = round2(balance * (working.parentSettings.hysaApr / 52));
+    if (interest > 0) {
+      working = recordTransaction(working, kid.id, interest, "🏦", "interest", "Interest Day", due.toISOString());
+    }
+    working = {
+      ...working,
+      kids: working.kids.map((candidate) =>
+        candidate.id === kid.id ? { ...candidate, lastInterestPaidAt: due.toISOString() } : candidate,
+      ),
+    };
+    due = new Date(due.getTime() + WEEK_MS);
+    payments++;
+  }
+
+  return working;
+}
+
 function currentStreakWeeks(state: FamilyBankState, kidId: string, now: Date): number {
   const kid = state.kids.find((candidate) => candidate.id === kidId);
   const streak = state.streaks.find((candidate) => candidate.kidId === kidId);
@@ -103,14 +141,16 @@ function processDadMatchForKid(state: FamilyBankState, kid: KidProfile, now: Dat
 }
 
 /**
- * Runs the allowance + Dad Match engines for every kid. Returns the same
- * object reference if nothing was due, so callers can skip committing/
+ * Runs the allowance + interest + Dad Match engines for every kid. Returns the
+ * same object reference if nothing was due, so callers can skip committing/
  * broadcasting a no-op state.
  */
 export function runScheduledEngines(state: FamilyBankState, now: Date = new Date()): FamilyBankState {
   let working = state;
   for (const kid of state.kids) {
     working = processAllowanceForKid(working, kid, now);
+    const afterAllowance = working.kids.find((k) => k.id === kid.id) ?? kid;
+    working = processInterestForKid(working, afterAllowance, now);
     working = processDadMatchForKid(working, working.kids.find((k) => k.id === kid.id) ?? kid, now);
   }
   return working;
