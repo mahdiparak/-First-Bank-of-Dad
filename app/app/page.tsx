@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { AddKidForm, type AddKidFormValues } from "@/components/add-kid-form";
 import { ApprovalQueue } from "@/components/approval-queue";
 import { KidDashboard } from "@/components/kid-dashboard";
+import { MarketDataSettings } from "@/components/market-data-settings";
 import { ParentSettingsPanel } from "@/components/parent-settings";
 import { ReconciliationPanel } from "@/components/reconciliation-panel";
 import { ParentLoginPrompt, RoleChooser } from "@/components/role-gate";
@@ -409,6 +410,8 @@ export default function Home() {
           <ReconciliationPanel state={state} onMutate={handleMutate} />
 
           <ParentSettingsPanel state={state} onMutate={handleMutate} />
+
+          <MarketDataSettings marketData={marketData} onMarketDataRefreshed={setMarketData} />
 
           <section className="flex flex-wrap gap-3">
             <button

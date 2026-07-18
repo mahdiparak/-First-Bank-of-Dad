@@ -22,6 +22,7 @@ const ROOM_ID_KEY = "room-id";
 const DEVICE_ID_KEY = "device-id";
 const DEVICE_ROLE_KEY = "device-role";
 const DEVICE_KID_ID_KEY = "device-kid-id";
+const MARKET_DATA_ADMIN_TOKEN_KEY = "market-data-admin-token";
 
 export type DeviceRole = "parent" | "kid";
 
@@ -83,6 +84,20 @@ export async function saveDeviceKidId(kidId: string | null): Promise<void> {
     await keyStore.setItem(DEVICE_KID_ID_KEY, kidId);
   } else {
     await keyStore.removeItem(DEVICE_KID_ID_KEY);
+  }
+}
+
+// The market-data Worker's admin bearer token — local to this device only, and never part of
+// the synced FamilyBankState (that syncs to every kid's device too).
+export async function loadMarketDataAdminToken(): Promise<string | null> {
+  return keyStore.getItem<string>(MARKET_DATA_ADMIN_TOKEN_KEY);
+}
+
+export async function saveMarketDataAdminToken(token: string | null): Promise<void> {
+  if (token) {
+    await keyStore.setItem(MARKET_DATA_ADMIN_TOKEN_KEY, token);
+  } else {
+    await keyStore.removeItem(MARKET_DATA_ADMIN_TOKEN_KEY);
   }
 }
 

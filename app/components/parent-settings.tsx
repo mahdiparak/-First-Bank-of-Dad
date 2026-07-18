@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { hashPin } from "@/lib/crypto";
-import { setDadMatchMilestones, setParentPinHash, updateParentSettings } from "@/lib/mutations";
+import { payTaxRefund, setDadMatchMilestones, setParentPinHash, updateParentSettings } from "@/lib/mutations";
 import type { FamilyBankState } from "@/lib/schema";
 
 const inputClass =
@@ -23,6 +23,16 @@ export function ParentSettingsPanel({
   const [milestoneBonus, setMilestoneBonus] = useState("");
   const [pin, setPin] = useState("");
   const [pinMessage, setPinMessage] = useState<string | null>(null);
+  const [taxError, setTaxError] = useState<string | null>(null);
+
+  function handlePayTaxRefund(kidId: string) {
+    try {
+      setTaxError(null);
+      onMutate((s) => payTaxRefund(s, kidId));
+    } catch (error) {
+      setTaxError(error instanceof Error ? error.message : "Something went wrong.");
+    }
+  }
 
   function handleSaveRates(event: React.FormEvent) {
     event.preventDefault();
@@ -93,7 +103,34 @@ export function ParentSettingsPanel({
         </button>
       </form>
 
-      <div className="space-y-2">
+      <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
+        <p className="text-sm opacity-70">Tax pots</p>
+        <p className="text-xs opacity-60">
+          The Family Tax withheld from each allowance payment, ready to pay out as a reward.
+        </p>
+        {taxError && <p className="text-sm text-red-500">{taxError}</p>}
+        {state.kids.length === 0 && <p className="text-xs opacity-60">No kids yet.</p>}
+        {state.kids.map((kid) => {
+          const pot = state.taxPots.find((candidate) => candidate.kidId === kid.id);
+          const balance = pot?.balance ?? 0;
+          return (
+            <div key={kid.id} className="flex items-center justify-between text-sm">
+              <span>
+                {kid.name} — {formatCurrency(balance)}
+              </span>
+              <button
+                onClick={() => handlePayTaxRefund(kid.id)}
+                disabled={balance <= 0}
+                className="rounded-md border border-black/20 px-2 py-1 text-xs disabled:opacity-40 dark:border-white/20"
+              >
+                Pay Tax Refund
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
         <p className="text-sm opacity-70">Dad Match milestones</p>
         {settings.dadMatchMilestones.map((milestone) => (
           <div key={milestone.weeks} className="flex items-center justify-between text-sm">

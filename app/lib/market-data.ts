@@ -23,10 +23,14 @@ interface CacheEntry {
   data: MarketDataResponse;
 }
 
-/** Fetches the public market-data feed (see ../worker-market-data), caching it locally for up to 12h. */
-export async function loadMarketData(): Promise<MarketDataResponse | null> {
+/**
+ * Fetches the public market-data feed (see ../worker-market-data), caching it locally for up to
+ * 12h. Pass `force: true` right after telling the Worker to refresh (via the admin endpoint) to
+ * bypass that cache and pull the new data immediately.
+ */
+export async function loadMarketData(options?: { force?: boolean }): Promise<MarketDataResponse | null> {
   const cached = await cacheStore.getItem<CacheEntry>(CACHE_KEY);
-  if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < CACHE_MAX_AGE_MS) {
+  if (!options?.force && cached && Date.now() - new Date(cached.fetchedAt).getTime() < CACHE_MAX_AGE_MS) {
     return cached.data;
   }
 

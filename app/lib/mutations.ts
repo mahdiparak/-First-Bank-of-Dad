@@ -359,6 +359,18 @@ export function removeCashAdjustment(state: FamilyBankState, adjustmentId: strin
   });
 }
 
+/** Parent-side: pays out a kid's accumulated Family Tax pot as a reward, then zeroes it out. */
+export function payTaxRefund(state: FamilyBankState, kidId: string): FamilyBankState {
+  const pot = state.taxPots.find((candidate) => candidate.kidId === kidId);
+  if (!pot || pot.balance <= 0) throw new Error("Nothing in the tax pot to refund.");
+
+  const withCredit = recordTransaction(state, kidId, pot.balance, "🧾", "tax", "Tax Refund");
+  return touch({
+    ...withCredit,
+    taxPots: withCredit.taxPots.map((candidate) => (candidate.kidId === kidId ? { ...candidate, balance: 0 } : candidate)),
+  });
+}
+
 const CD_EMOJI_BY_ASSET: Record<AssetClass, string> = {
   savings: "🚲",
   cd: "🔒",
