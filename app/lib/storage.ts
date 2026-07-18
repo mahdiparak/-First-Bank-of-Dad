@@ -20,6 +20,10 @@ const STATE_KEY = "family-bank-state";
 const CRYPTO_KEY_KEY = "encryption-key";
 const ROOM_ID_KEY = "room-id";
 const DEVICE_ID_KEY = "device-id";
+const DEVICE_ROLE_KEY = "device-role";
+const DEVICE_KID_ID_KEY = "device-kid-id";
+
+export type DeviceRole = "parent" | "kid";
 
 export async function loadState(): Promise<FamilyBankState | null> {
   return stateStore.getItem<FamilyBankState>(STATE_KEY);
@@ -52,6 +56,34 @@ export async function saveRoomId(roomId: string): Promise<void> {
 /** Forgets the derived key/room id (e.g. "log out"). The Family Phrase itself was never stored. */
 export async function forgetFamilyPhraseMaterial(): Promise<void> {
   await keyStore.clear();
+}
+
+// This device's role/assigned kid is a local preference, not part of the
+// synced FamilyBankState — different devices in the same family can be in
+// different modes (dad's phone in Parent mode, a kid's tablet locked to
+// their own Kid View).
+export async function loadDeviceRole(): Promise<DeviceRole | null> {
+  return keyStore.getItem<DeviceRole>(DEVICE_ROLE_KEY);
+}
+
+export async function saveDeviceRole(role: DeviceRole | null): Promise<void> {
+  if (role) {
+    await keyStore.setItem(DEVICE_ROLE_KEY, role);
+  } else {
+    await keyStore.removeItem(DEVICE_ROLE_KEY);
+  }
+}
+
+export async function loadDeviceKidId(): Promise<string | null> {
+  return keyStore.getItem<string>(DEVICE_KID_ID_KEY);
+}
+
+export async function saveDeviceKidId(kidId: string | null): Promise<void> {
+  if (kidId) {
+    await keyStore.setItem(DEVICE_KID_ID_KEY, kidId);
+  } else {
+    await keyStore.removeItem(DEVICE_KID_ID_KEY);
+  }
 }
 
 export async function getOrCreateDeviceId(): Promise<string> {

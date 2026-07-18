@@ -116,6 +116,8 @@ export interface ParentSettings {
   cdApr: number;
   taxRate: number;
   dadMatchMilestones: DadMatchMilestone[];
+  /** SHA-256 hash gating Kid View -> Parent Command Center. Unset = no gate. */
+  parentPinHash?: string;
 }
 
 export interface FamilyBankState {

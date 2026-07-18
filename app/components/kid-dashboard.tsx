@@ -2,16 +2,27 @@
 
 import { useState } from "react";
 import { daysUntilPayday, weeksWithoutWithdrawalFor } from "@/lib/allowance";
-import { allocateToGoal, availableBalanceForKid, createGoal, logPurchase, totalBalanceForKid } from "@/lib/mutations";
+import {
+  allocateToGoal,
+  availableBalanceForKid,
+  createGoal,
+  logPurchase,
+  totalBalanceForKid,
+  updateKidAllowance,
+} from "@/lib/mutations";
 import { SPENDING_CATEGORIES, type FamilyBankState, type KidProfile } from "@/lib/schema";
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export function KidDashboard({
   state,
   kid,
+  role,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
+  role: "parent" | "kid";
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +66,7 @@ export function KidDashboard({
           <p className="text-sm opacity-70">Allowance</p>
           <p className="text-3xl font-semibold">{formatCurrency(kid.weeklyAllowance)}/wk</p>
           <p className="text-xs opacity-60">{days === 0 ? "Payday today!" : `Payday in ${days} day${days === 1 ? "" : "s"}`}</p>
+          {role === "parent" && <AllowanceEditor kid={kid} onMutate={tryMutate} />}
         </div>
       </section>
 
@@ -75,6 +87,62 @@ export function KidDashboard({
 
       <Ledger transactions={transactions} available={available} onMutate={tryMutate} kid={kid} />
     </div>
+  );
+}
+
+function AllowanceEditor({
+  kid,
+  onMutate,
+}: {
+  kid: KidProfile;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [amount, setAmount] = useState(String(kid.weeklyAllowance));
+  const [weekday, setWeekday] = useState(String(kid.paydayWeekday));
+
+  function handleSave(event: React.FormEvent) {
+    event.preventDefault();
+    onMutate((state) => updateKidAllowance(state, kid.id, Number(amount), Number(weekday)));
+    setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <button onClick={() => setEditing(true)} className="mt-1 text-xs underline opacity-70">
+        Edit allowance
+      </button>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSave} className="mt-2 flex flex-wrap items-center gap-2">
+      <input
+        value={amount}
+        onChange={(event) => setAmount(event.target.value)}
+        type="number"
+        min={0}
+        step="0.01"
+        className="w-24 rounded-md border border-black/20 px-2 py-1 text-sm dark:border-white/20 dark:bg-transparent"
+      />
+      <select
+        value={weekday}
+        onChange={(event) => setWeekday(event.target.value)}
+        className="rounded-md border border-black/20 px-2 py-1 text-sm dark:border-white/20 dark:bg-transparent"
+      >
+        {WEEKDAYS.map((label, index) => (
+          <option key={label} value={index}>
+            {label}
+          </option>
+        ))}
+      </select>
+      <button type="submit" className="rounded-md bg-black px-2 py-1 text-xs text-white dark:bg-white dark:text-black">
+        Save
+      </button>
+      <button type="button" onClick={() => setEditing(false)} className="text-xs opacity-70">
+        Cancel
+      </button>
+    </form>
   );
 }
 

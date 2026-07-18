@@ -7,6 +7,7 @@
 const PBKDF2_ITERATIONS = 600_000; // OWASP 2023 minimum for PBKDF2-SHA256
 const KEY_DERIVATION_SALT = new TextEncoder().encode("first-bank-of-dad:key:v1");
 const ROOM_ID_DOMAIN = "first-bank-of-dad:room:v1:";
+const PARENT_PIN_DOMAIN = "first-bank-of-dad:parent-pin:v1:";
 const IV_BYTES = 12;
 
 function normalizePhrase(phrase: string): string {
@@ -45,6 +46,20 @@ export async function deriveRoomId(phrase: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(ROOM_ID_DOMAIN + normalizePhrase(phrase)),
+  );
+  return toHex(digest);
+}
+
+/**
+ * Hashes the parent PIN used to gate switching a device from Kid View into
+ * the Parent Command Center. This is a UI speed bump, not a security
+ * boundary — anyone holding the Family Phrase already has the plaintext
+ * state — so a plain domain-separated SHA-256 is enough.
+ */
+export async function hashPin(pin: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(PARENT_PIN_DOMAIN + pin.trim()),
   );
   return toHex(digest);
 }
