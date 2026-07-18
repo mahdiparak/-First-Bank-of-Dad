@@ -5,12 +5,13 @@ import { daysUntilPayday, weeksWithoutWithdrawalFor } from "@/lib/allowance";
 import {
   allocateToGoal,
   availableBalanceForKid,
+  claimBounty,
   createGoal,
-  logPurchase,
+  requestWithdrawal,
   totalBalanceForKid,
   updateKidAllowance,
 } from "@/lib/mutations";
-import { SPENDING_CATEGORIES, type FamilyBankState, type KidProfile } from "@/lib/schema";
+import { SPENDING_CATEGORIES, type Bounty, type FamilyBankState, type KidProfile } from "@/lib/schema";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -45,10 +46,8 @@ export function KidDashboard({
     .sort((a, b) => a.weeks - b.weeks)[0];
 
   const goals = state.goals.filter((goal) => goal.kidId === kid.id);
-  const transactions = state.transactions
-    .filter((transaction) => transaction.kidId === kid.id)
-    .slice()
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const transactions = state.transactions.filter((transaction) => transaction.kidId === kid.id);
+  const withdrawalRequests = state.withdrawalRequests.filter((request) => request.kidId === kid.id);
 
   return (
     <div className="space-y-6">
@@ -59,7 +58,9 @@ export function KidDashboard({
           <p className="text-sm opacity-70">Total balance</p>
           <p className="text-3xl font-semibold">{formatCurrency(total)}</p>
           {available !== total && (
-            <p className="text-xs opacity-60">{formatCurrency(available)} available (rest saved toward goals)</p>
+            <p className="text-xs opacity-60">
+              {formatCurrency(available)} available (rest saved toward goals or pending approval)
+            </p>
           )}
         </div>
         <div className="rounded-xl border border-black/10 p-4 dark:border-white/10">
@@ -85,7 +86,9 @@ export function KidDashboard({
 
       <GoalGetter goals={goals} available={available} onMutate={tryMutate} kid={kid} />
 
-      <Ledger transactions={transactions} available={available} onMutate={tryMutate} kid={kid} />
+      {role === "kid" && <BountyBoard bounties={state.bounties} kid={kid} onMutate={tryMutate} />}
+
+      <Ledger transactions={transactions} withdrawalRequests={withdrawalRequests} available={available} onMutate={tryMutate} kid={kid} />
     </div>
   );
 }
@@ -234,13 +237,76 @@ function GoalGetter({
   );
 }
 
+function BountyBoard({
+  bounties,
+  kid,
+  onMutate,
+}: {
+  bounties: Bounty[];
+  kid: KidProfile;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const open = bounties.filter((bounty) => bounty.status === "open");
+  const mine = bounties.filter((bounty) => bounty.claimedByKidId === kid.id && bounty.status !== "open");
+
+  return (
+    <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
+      <h2 className="font-semibold">Bounty Board</h2>
+
+      {open.length === 0 && <p className="text-sm opacity-70">No open bounties right now.</p>}
+      <div className="space-y-2">
+        {open.map((bounty) => (
+          <div key={bounty.id} className="flex items-center justify-between text-sm">
+            <span>{bounty.title}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-green-600">{formatCurrency(bounty.reward)}</span>
+              <button
+                onClick={() => onMutate((state) => claimBounty(state, bounty.id, kid.id))}
+                className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
+              >
+                Claim
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {mine.length > 0 && (
+        <div className="space-y-1 border-t border-black/10 pt-2 dark:border-white/10">
+          {mine.map((bounty) => (
+            <div key={bounty.id} className="flex items-center justify-between text-xs opacity-70">
+              <span>{bounty.title}</span>
+              <span>{bountyStatusLabel(bounty.status)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function bountyStatusLabel(status: Bounty["status"]): string {
+  switch (status) {
+    case "pending-approval":
+      return "Waiting for Dad";
+    case "approved":
+      return "Paid! 🎉";
+    case "denied":
+      return "Not this time";
+    default:
+      return status;
+  }
+}
+
 function Ledger({
   transactions,
+  withdrawalRequests,
   available,
   kid,
   onMutate,
 }: {
   transactions: FamilyBankState["transactions"];
+  withdrawalRequests: FamilyBankState["withdrawalRequests"];
   available: number;
   kid: KidProfile;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
@@ -249,19 +315,30 @@ function Ledger({
   const [category, setCategory] = useState<string>(SPENDING_CATEGORIES[0].emoji);
   const [memo, setMemo] = useState("");
 
-  function handleLog(event: React.FormEvent) {
+  function handleRequest(event: React.FormEvent) {
     event.preventDefault();
     if (!amount) return;
-    onMutate((state) => logPurchase(state, kid.id, Number(amount), category, memo.trim() || undefined));
+    onMutate((state) => requestWithdrawal(state, kid.id, Number(amount), category, memo.trim() || undefined));
     setAmount("");
     setMemo("");
   }
+
+  type Row =
+    | { kind: "transaction"; at: string; item: FamilyBankState["transactions"][number] }
+    | { kind: "request"; at: string; item: FamilyBankState["withdrawalRequests"][number] };
+
+  const rows: Row[] = [
+    ...transactions.map((item): Row => ({ kind: "transaction", at: item.createdAt, item })),
+    ...withdrawalRequests
+      .filter((item) => item.status !== "approved") // approved ones already show as a transaction
+      .map((item): Row => ({ kind: "request", at: item.requestedAt, item })),
+  ].sort((a, b) => (a.at < b.at ? 1 : -1));
 
   return (
     <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
       <h2 className="font-semibold">Ledger</h2>
 
-      <form onSubmit={handleLog} className="flex flex-wrap gap-2">
+      <form onSubmit={handleRequest} className="flex flex-wrap gap-2">
         <select
           value={category}
           onChange={(event) => setCategory(event.target.value)}
@@ -293,24 +370,38 @@ function Ledger({
           disabled={available <= 0}
           className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
         >
-          Log spend
+          Ask to spend
         </button>
       </form>
+      <p className="text-xs opacity-60">Sends a request to Dad — the money leaves your balance once approved.</p>
 
       <div className="divide-y divide-black/10 dark:divide-white/10">
-        {transactions.length === 0 && <p className="py-2 text-sm opacity-70">No transactions yet.</p>}
-        {transactions.map((transaction) => (
-          <div key={transaction.id} className="flex items-center justify-between py-2 text-sm">
-            <div className="flex items-center gap-2">
-              <span>{transaction.category}</span>
-              <span>{transaction.memo ?? sourceLabel(transaction.source)}</span>
+        {rows.length === 0 && <p className="py-2 text-sm opacity-70">No transactions yet.</p>}
+        {rows.map((row) =>
+          row.kind === "transaction" ? (
+            <div key={row.item.id} className="flex items-center justify-between py-2 text-sm">
+              <div className="flex items-center gap-2">
+                <span>{row.item.category}</span>
+                <span>{row.item.memo ?? sourceLabel(row.item.source)}</span>
+              </div>
+              <span className={row.item.amount < 0 ? "text-red-500" : "text-green-600"}>
+                {row.item.amount < 0 ? "-" : "+"}
+                {formatCurrency(Math.abs(row.item.amount))}
+              </span>
             </div>
-            <span className={transaction.amount < 0 ? "text-red-500" : "text-green-600"}>
-              {transaction.amount < 0 ? "-" : "+"}
-              {formatCurrency(Math.abs(transaction.amount))}
-            </span>
-          </div>
-        ))}
+          ) : (
+            <div key={row.item.id} className="flex items-center justify-between py-2 text-sm opacity-60">
+              <div className="flex items-center gap-2">
+                <span>{row.item.category}</span>
+                <span>{row.item.reason ?? "Spending request"}</span>
+                <span className="text-xs italic">
+                  {row.item.status === "pending" ? "(waiting for Dad)" : "(denied)"}
+                </span>
+              </div>
+              <span>-{formatCurrency(row.item.amount)}</span>
+            </div>
+          ),
+        )}
       </div>
     </section>
   );

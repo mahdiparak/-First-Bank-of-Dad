@@ -92,6 +92,7 @@ export interface WithdrawalRequest {
   id: string;
   kidId: string;
   amount: number;
+  category: string; // emoji key chosen by the kid, same set as Transaction.category
   reason?: string;
   status: WithdrawalStatus;
   requestedAt: string;

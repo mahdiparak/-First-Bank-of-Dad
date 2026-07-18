@@ -16,9 +16,17 @@ export function savedTowardGoalsForKid(state: FamilyBankState, kidId: string): n
     .reduce((total, goal) => total + goal.savedAmount, 0);
 }
 
-/** Balance not already earmarked toward a savings goal — what a kid can freely spend or allocate. */
+export function pendingWithdrawalsForKid(state: FamilyBankState, kidId: string): number {
+  return state.withdrawalRequests
+    .filter((request) => request.kidId === kidId && request.status === "pending")
+    .reduce((total, request) => total + request.amount, 0);
+}
+
+/** Balance not already earmarked toward a goal or a pending withdrawal request. */
 export function availableBalanceForKid(state: FamilyBankState, kidId: string): number {
-  return totalBalanceForKid(state, kidId) - savedTowardGoalsForKid(state, kidId);
+  return (
+    totalBalanceForKid(state, kidId) - savedTowardGoalsForKid(state, kidId) - pendingWithdrawalsForKid(state, kidId)
+  );
 }
 
 export function addKid(
@@ -64,27 +72,70 @@ export function recordTransaction(
   });
 }
 
-export function logPurchase(
+/** Kid-side: asks a parent for money to spend. Nothing leaves the balance until approved. */
+export function requestWithdrawal(
   state: FamilyBankState,
   kidId: string,
   amount: number,
   category: string,
-  memo?: string,
+  reason?: string,
 ): FamilyBankState {
-  if (amount <= 0) throw new Error("Purchase amount must be positive.");
+  if (amount <= 0) throw new Error("Amount must be positive.");
   const available = availableBalanceForKid(state, kidId);
   if (amount > available) throw new Error("That's more than the available balance.");
 
-  const withTransaction = recordTransaction(state, kidId, -amount, category, "manual-withdrawal", memo);
+  return touch({
+    ...state,
+    withdrawalRequests: [
+      ...state.withdrawalRequests,
+      {
+        id: crypto.randomUUID(),
+        kidId,
+        amount,
+        category,
+        reason,
+        status: "pending",
+        requestedAt: new Date().toISOString(),
+      },
+    ],
+  });
+}
+
+/** Parent-side: approves a pending withdrawal, which is what actually debits the kid's balance. */
+export function approveWithdrawal(state: FamilyBankState, requestId: string): FamilyBankState {
+  const request = state.withdrawalRequests.find((candidate) => candidate.id === requestId);
+  if (!request || request.status !== "pending") throw new Error("Nothing to approve.");
+
   const now = new Date().toISOString();
+  const withTransaction = recordTransaction(
+    state,
+    request.kidId,
+    -request.amount,
+    request.category,
+    "manual-withdrawal",
+    request.reason,
+  );
+
   return {
     ...withTransaction,
     streaks: withTransaction.streaks.map((streak) =>
-      streak.kidId === kidId
-        ? { ...streak, weeksWithoutWithdrawal: 0, lastWithdrawalAt: now }
-        : streak,
+      streak.kidId === request.kidId ? { ...streak, lastWithdrawalAt: now } : streak,
+    ),
+    withdrawalRequests: withTransaction.withdrawalRequests.map((candidate) =>
+      candidate.id === requestId ? { ...candidate, status: "approved", resolvedAt: now } : candidate,
     ),
   };
+}
+
+/** Parent-side: denies a pending withdrawal. Nothing changes for the kid's balance. */
+export function denyWithdrawal(state: FamilyBankState, requestId: string): FamilyBankState {
+  const now = new Date().toISOString();
+  return touch({
+    ...state,
+    withdrawalRequests: state.withdrawalRequests.map((candidate) =>
+      candidate.id === requestId ? { ...candidate, status: "denied", resolvedAt: now } : candidate,
+    ),
+  });
 }
 
 export function createGoal(
@@ -178,4 +229,130 @@ export function setParentPinHash(state: FamilyBankState, pinHash: string | null)
     delete parentSettings.parentPinHash;
   }
   return touch({ ...state, parentSettings });
+}
+
+/** Parent-side: posts a new gig on the Bounty Board. */
+export function createBounty(state: FamilyBankState, title: string, reward: number): FamilyBankState {
+  if (reward <= 0) throw new Error("Reward must be positive.");
+  return touch({
+    ...state,
+    bounties: [...state.bounties, { id: crypto.randomUUID(), title, reward, status: "open" }],
+  });
+}
+
+/** Kid-side: claims an open bounty, putting it in the parent's approval queue. */
+export function claimBounty(state: FamilyBankState, bountyId: string, kidId: string): FamilyBankState {
+  const bounty = state.bounties.find((candidate) => candidate.id === bountyId);
+  if (!bounty || bounty.status !== "open") throw new Error("That bounty isn't available anymore.");
+
+  return touch({
+    ...state,
+    bounties: state.bounties.map((candidate) =>
+      candidate.id === bountyId
+        ? { ...candidate, status: "pending-approval", claimedByKidId: kidId, claimedAt: new Date().toISOString() }
+        : candidate,
+    ),
+  });
+}
+
+/** Parent-side: approves a claimed bounty, which pays out the reward to the kid who claimed it. */
+export function approveBounty(state: FamilyBankState, bountyId: string): FamilyBankState {
+  const bounty = state.bounties.find((candidate) => candidate.id === bountyId);
+  if (!bounty || bounty.status !== "pending-approval" || !bounty.claimedByKidId) {
+    throw new Error("Nothing to approve.");
+  }
+
+  const now = new Date().toISOString();
+  const withPayout = recordTransaction(state, bounty.claimedByKidId, bounty.reward, "💪", "bounty", bounty.title);
+
+  return {
+    ...withPayout,
+    bounties: withPayout.bounties.map((candidate) =>
+      candidate.id === bountyId ? { ...candidate, status: "approved", resolvedAt: now } : candidate,
+    ),
+  };
+}
+
+/** Parent-side: denies a claim and reopens the bounty for anyone to try again. */
+export function denyBounty(state: FamilyBankState, bountyId: string): FamilyBankState {
+  return touch({
+    ...state,
+    bounties: state.bounties.map((candidate) =>
+      candidate.id === bountyId
+        ? { ...candidate, status: "open", claimedByKidId: undefined, claimedAt: undefined }
+        : candidate,
+    ),
+  });
+}
+
+/** The sum of every kid's cash balance plus the current value of their mock investments. */
+export function virtualAppBalance(state: FamilyBankState): number {
+  const cash = state.kids.reduce((total, kid) => total + totalBalanceForKid(state, kid.id), 0);
+  const investments = state.investments.reduce((total, position) => total + position.currentValue, 0);
+  return cash + investments;
+}
+
+function sumCashAdjustments(state: FamilyBankState): number {
+  return state.reconciliation.cashAdjustments.reduce((total, adjustment) => total + adjustment.amount, 0);
+}
+
+/**
+ * What the parent still owes the kids beyond what's actually sitting in the real HYSA —
+ * i.e. how much more real money needs to move into the account (or how much surplus exists,
+ * if negative). Cash adjustments are manual corrections for money already reconciled outside
+ * a specific kid's ledger (e.g. bank-paid interest not yet reflected).
+ */
+export function parentCashLiability(state: FamilyBankState): number {
+  return virtualAppBalance(state) - state.reconciliation.actualHysaBalance - sumCashAdjustments(state);
+}
+
+/** Parent-side: records what the real HYSA balance actually is right now. */
+export function setActualHysaBalance(state: FamilyBankState, amount: number): FamilyBankState {
+  return touch({
+    ...state,
+    reconciliation: { ...state.reconciliation, actualHysaBalance: amount, lastUpdatedAt: new Date().toISOString() },
+  });
+}
+
+/**
+ * Parent-side: records a real, physical cash movement tied to a specific kid — e.g. a kid
+ * handed over birthday cash (positive) or the parent bought something with cash instead of
+ * from the HYSA (negative). This adjusts the kid's virtual balance directly.
+ */
+export function recordCashMovementForKid(
+  state: FamilyBankState,
+  kidId: string,
+  amount: number,
+  note?: string,
+): FamilyBankState {
+  if (amount === 0) throw new Error("Amount can't be zero.");
+  const source: TransactionSource = amount > 0 ? "manual-deposit" : "manual-withdrawal";
+  return recordTransaction(state, kidId, amount, "💵", source, note);
+}
+
+/** Parent-side: a general reconciliation note not tied to any one kid (e.g. bank-paid interest). */
+export function addCashAdjustment(state: FamilyBankState, amount: number, note?: string): FamilyBankState {
+  if (amount === 0) throw new Error("Amount can't be zero.");
+  return touch({
+    ...state,
+    reconciliation: {
+      ...state.reconciliation,
+      cashAdjustments: [
+        ...state.reconciliation.cashAdjustments,
+        { id: crypto.randomUUID(), amount, note, createdAt: new Date().toISOString() },
+      ],
+    },
+  });
+}
+
+export function removeCashAdjustment(state: FamilyBankState, adjustmentId: string): FamilyBankState {
+  return touch({
+    ...state,
+    reconciliation: {
+      ...state.reconciliation,
+      cashAdjustments: state.reconciliation.cashAdjustments.filter(
+        (adjustment) => adjustment.id !== adjustmentId,
+      ),
+    },
+  });
 }

@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AddKidForm, type AddKidFormValues } from "@/components/add-kid-form";
+import { ApprovalQueue } from "@/components/approval-queue";
 import { KidDashboard } from "@/components/kid-dashboard";
 import { ParentSettingsPanel } from "@/components/parent-settings";
+import { ReconciliationPanel } from "@/components/reconciliation-panel";
 import { ParentLoginPrompt, RoleChooser } from "@/components/role-gate";
 import { runScheduledEngines } from "@/lib/allowance";
 import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
@@ -383,6 +385,10 @@ export default function Home() {
           )}
 
           <AddKidForm onSubmit={handleAddKid} />
+
+          <ApprovalQueue state={state} onMutate={handleMutate} />
+
+          <ReconciliationPanel state={state} onMutate={handleMutate} />
 
           <ParentSettingsPanel state={state} onMutate={handleMutate} />
 
