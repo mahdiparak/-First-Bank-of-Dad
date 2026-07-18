@@ -9,6 +9,8 @@ import { ReconciliationPanel } from "@/components/reconciliation-panel";
 import { ParentLoginPrompt, RoleChooser } from "@/components/role-gate";
 import { runScheduledEngines } from "@/lib/allowance";
 import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
+import { runInvestmentEngine } from "@/lib/investment-engine";
+import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
 import { createEmptyState, type FamilyBankState } from "@/lib/schema";
 import {
@@ -61,6 +63,8 @@ export default function Home() {
   const [showParentLogin, setShowParentLogin] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
   const [importError, setImportError] = useState<string | null>(null);
+  const [marketData, setMarketData] = useState<MarketDataResponse | null>(null);
+  const [marketDataLoaded, setMarketDataLoaded] = useState(false);
 
   const roomIdRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
@@ -103,6 +107,20 @@ export default function Home() {
     return () => syncClientRef.current?.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    void loadMarketData().then((data) => {
+      setMarketData(data);
+      setMarketDataLoaded(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!state || !marketDataLoaded) return;
+    const updated = runInvestmentEngine(state, marketData);
+    if (updated !== state) commitState(updated);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, marketDataLoaded, marketData]);
 
   function startSync(key: CryptoKey, roomId: string) {
     if (!RELAY_URL) {
@@ -300,7 +318,7 @@ export default function Home() {
         </header>
 
         {kid ? (
-          <KidDashboard state={state} kid={kid} role="kid" onMutate={handleMutate} />
+          <KidDashboard state={state} kid={kid} role="kid" marketData={marketData} onMutate={handleMutate} />
         ) : (
           <p className="text-sm opacity-70">Ask a parent to set this device up.</p>
         )}
@@ -372,7 +390,7 @@ export default function Home() {
 
           {selectedKid ? (
             <>
-              <KidDashboard state={state} kid={selectedKid} role="parent" onMutate={handleMutate} />
+              <KidDashboard state={state} kid={selectedKid} role="parent" marketData={marketData} onMutate={handleMutate} />
               <button
                 onClick={() => handleEnterKidView(selectedKid.id)}
                 className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"

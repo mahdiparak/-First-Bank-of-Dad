@@ -82,9 +82,18 @@ export interface InvestmentPosition {
   principal: number;
   currentValue: number;
   openedAt: string;
+  lastGrowthUpdateAt: string;
   lockWeeks?: number; // CD only
   maturesAt?: string; // CD only
+  closedAt?: string;
 }
+
+export const ASSET_CLASSES: Record<AssetClass, { label: string; description: string }> = {
+  savings: { label: "Savings (The Bicycle)", description: "Steady and safe — the real HYSA rate, no crashes." },
+  cd: { label: "CD (The Time Vault)", description: "A higher fixed rate, but your money is locked up for a while." },
+  stocks: { label: "Stocks (The Rollercoaster)", description: "Ups and downs like the real stock market." },
+  crypto: { label: "Crypto (The Rocket Booster)", description: "Huge swings — big gains, big drops." },
+};
 
 export type WithdrawalStatus = "pending" | "approved" | "denied";
 

@@ -1,4 +1,4 @@
-import type { DadMatchMilestone, FamilyBankState, KidProfile, ParentSettings, TransactionSource } from "./schema";
+import type { AssetClass, DadMatchMilestone, FamilyBankState, KidProfile, ParentSettings, TransactionSource } from "./schema";
 
 function touch(state: FamilyBankState): FamilyBankState {
   return { ...state, updatedAt: new Date().toISOString() };
@@ -285,10 +285,12 @@ export function denyBounty(state: FamilyBankState, bountyId: string): FamilyBank
   });
 }
 
-/** The sum of every kid's cash balance plus the current value of their mock investments. */
+/** The sum of every kid's cash balance plus the current value of their still-open mock investments. */
 export function virtualAppBalance(state: FamilyBankState): number {
   const cash = state.kids.reduce((total, kid) => total + totalBalanceForKid(state, kid.id), 0);
-  const investments = state.investments.reduce((total, position) => total + position.currentValue, 0);
+  const investments = state.investments
+    .filter((position) => !position.closedAt)
+    .reduce((total, position) => total + position.currentValue, 0);
   return cash + investments;
 }
 
@@ -354,5 +356,90 @@ export function removeCashAdjustment(state: FamilyBankState, adjustmentId: strin
         (adjustment) => adjustment.id !== adjustmentId,
       ),
     },
+  });
+}
+
+const CD_EMOJI_BY_ASSET: Record<AssetClass, string> = {
+  savings: "🚲",
+  cd: "🔒",
+  stocks: "🎢",
+  crypto: "🚀",
+};
+
+/** Moves real balance into a mock investment position — this is what the kid actually "owns" less. */
+export function allocateToInvestment(
+  state: FamilyBankState,
+  kidId: string,
+  assetClass: AssetClass,
+  amount: number,
+  lockWeeks?: number,
+): FamilyBankState {
+  if (amount <= 0) throw new Error("Amount must be positive.");
+  if (amount > availableBalanceForKid(state, kidId)) {
+    throw new Error("That's more than the available balance.");
+  }
+
+  const now = new Date().toISOString();
+  const withDebit = recordTransaction(
+    state,
+    kidId,
+    -amount,
+    CD_EMOJI_BY_ASSET[assetClass],
+    "investment",
+    `Invested in ${assetClass}`,
+  );
+
+  const maturesAt =
+    assetClass === "cd" && lockWeeks
+      ? new Date(Date.now() + lockWeeks * 7 * 24 * 60 * 60 * 1000).toISOString()
+      : undefined;
+
+  return touch({
+    ...withDebit,
+    investments: [
+      ...withDebit.investments,
+      {
+        id: crypto.randomUUID(),
+        kidId,
+        assetClass,
+        principal: amount,
+        currentValue: amount,
+        openedAt: now,
+        lastGrowthUpdateAt: now,
+        lockWeeks: assetClass === "cd" ? lockWeeks : undefined,
+        maturesAt,
+      },
+    ],
+  });
+}
+
+/**
+ * Cashes out an investment position back into spendable balance. A CD withdrawn before its
+ * maturity date forfeits any gains beyond the original principal — the "penalty for early
+ * withdrawal" the CD trades its higher rate for.
+ */
+export function withdrawFromInvestment(state: FamilyBankState, positionId: string): FamilyBankState {
+  const position = state.investments.find((candidate) => candidate.id === positionId);
+  if (!position || position.closedAt) throw new Error("Investment not found.");
+
+  const now = new Date().toISOString();
+  const isEarlyCdWithdrawal =
+    position.assetClass === "cd" && position.maturesAt && new Date(position.maturesAt) > new Date(now);
+  const payout = isEarlyCdWithdrawal ? Math.min(position.currentValue, position.principal) : position.currentValue;
+
+  const withCredit = recordTransaction(
+    state,
+    position.kidId,
+    payout,
+    CD_EMOJI_BY_ASSET[position.assetClass],
+    "investment",
+    isEarlyCdWithdrawal ? "Early CD withdrawal (forfeited interest)" : `Cashed out ${position.assetClass}`,
+  );
+
+  return touch({
+    ...withCredit,
+    investments: withCredit.investments.map((candidate) =>
+      candidate.id === positionId ? { ...candidate, currentValue: payout, closedAt: now } : candidate,
+    ),
   });
 }

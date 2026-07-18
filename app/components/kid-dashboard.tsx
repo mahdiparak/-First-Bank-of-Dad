@@ -12,6 +12,8 @@ import {
   updateKidAllowance,
 } from "@/lib/mutations";
 import { SPENDING_CATEGORIES, type Bounty, type FamilyBankState, type KidProfile } from "@/lib/schema";
+import { InvestmentSandbox } from "./investment-sandbox";
+import type { MarketDataResponse } from "@/lib/market-data";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -19,11 +21,13 @@ export function KidDashboard({
   state,
   kid,
   role,
+  marketData,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   role: "parent" | "kid";
+  marketData: MarketDataResponse | null;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +89,8 @@ export function KidDashboard({
       </section>
 
       <GoalGetter goals={goals} available={available} onMutate={tryMutate} kid={kid} />
+
+      <InvestmentSandbox state={state} kid={kid} marketData={marketData} onMutate={tryMutate} />
 
       {role === "kid" && <BountyBoard bounties={state.bounties} kid={kid} onMutate={tryMutate} />}
 
