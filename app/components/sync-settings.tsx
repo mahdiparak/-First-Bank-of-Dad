@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { loadDefaultRoomId, loadRoomId } from "@/lib/storage";
+import { InfoTooltip } from "./info-tooltip";
 
 /**
  * The sync "room" defaults to a value derived from the Family Phrase (never shown or editable
@@ -42,7 +43,24 @@ export function SyncSettings({ onSave }: { onSave: (roomId: string) => void }) {
 
   return (
     <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
-      <h2 className="font-semibold">Sync Room</h2>
+      <h2 className="flex items-center font-semibold">
+        Sync Room
+        <InfoTooltip label="What is a Sync Room?">
+          <p>
+            Every device (yours, your co-parent&apos;s, a kid&apos;s tablet) that should see the
+            same balances needs this exact same Room ID — it&apos;s how they find each other.
+          </p>
+          <p>
+            Normally you never touch this — it&apos;s derived automatically from your Family
+            Phrase. Only change it if you deliberately want to split some devices into a separate,
+            unlinked sync group.
+          </p>
+          <p>
+            If a device isn&apos;t syncing, this is the first thing to check — compare the
+            &quot;Current&quot; value below across devices.
+          </p>
+        </InfoTooltip>
+      </h2>
       <p className="text-xs opacity-60">
         Devices only sync with each other when they&apos;re in the same room. This defaults to a
         value derived from your Family Phrase, but you can override it — e.g. to deliberately run

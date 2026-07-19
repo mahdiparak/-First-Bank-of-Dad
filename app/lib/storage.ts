@@ -26,6 +26,7 @@ const DEVICE_KID_ID_KEY = "device-kid-id";
 const DEVICE_PARENT_ID_KEY = "device-parent-id";
 const INSTALL_BANNER_DISMISSED_KEY = "install-banner-dismissed";
 const MARKET_DATA_ADMIN_TOKEN_KEY = "market-data-admin-token";
+const ALPHA_VANTAGE_API_KEY_KEY = "alpha-vantage-api-key";
 
 export type DeviceRole = "parent" | "kid";
 
@@ -133,6 +134,20 @@ export async function saveMarketDataAdminToken(token: string | null): Promise<vo
     await keyStore.setItem(MARKET_DATA_ADMIN_TOKEN_KEY, token);
   } else {
     await keyStore.removeItem(MARKET_DATA_ADMIN_TOKEN_KEY);
+  }
+}
+
+// Remembered locally too — purely so the field doesn't come back empty (and unverifiable)
+// after a page reload, whether or not the last save to the Worker actually succeeded.
+export async function loadAlphaVantageApiKey(): Promise<string | null> {
+  return keyStore.getItem<string>(ALPHA_VANTAGE_API_KEY_KEY);
+}
+
+export async function saveAlphaVantageApiKey(apiKey: string | null): Promise<void> {
+  if (apiKey) {
+    await keyStore.setItem(ALPHA_VANTAGE_API_KEY_KEY, apiKey);
+  } else {
+    await keyStore.removeItem(ALPHA_VANTAGE_API_KEY_KEY);
   }
 }
 

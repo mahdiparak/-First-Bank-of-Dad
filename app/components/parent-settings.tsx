@@ -125,7 +125,23 @@ export function ParentSettingsPanel({
       </div>
 
       <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
-        <p className="text-sm opacity-70">Dad Match milestones</p>
+        <p className="flex items-center text-sm opacity-70">
+          Dad Match milestones
+          <InfoTooltip label="How do Dad Match milestones work?">
+            <p>
+              A reward for saving streaks: go a set number of weeks in a row without withdrawing,
+              and a one-time bonus gets paid in automatically.
+            </p>
+            <p>
+              <strong>Weeks:</strong> how many consecutive weeks without a withdrawal earns it.
+            </p>
+            <p>
+              <strong>Bonus $:</strong> the one-time amount paid when that streak is hit. Spending
+              toward a completed savings goal doesn&apos;t break the streak — only unplanned
+              withdrawals do.
+            </p>
+          </InfoTooltip>
+        </p>
         {settings.dadMatchMilestones.map((milestone) => (
           <div key={milestone.weeks} className="flex items-center justify-between text-sm">
             <span>
@@ -161,7 +177,20 @@ export function ParentSettingsPanel({
       </div>
 
       <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
-        <p className="text-sm opacity-70">Tax pots</p>
+        <p className="flex items-center text-sm opacity-70">
+          Tax pots
+          <InfoTooltip label="How do Tax pots work?">
+            <p>
+              Every allowance payment automatically withholds the Family Tax % set above into this
+              pot — just like real income tax withholding.
+            </p>
+            <p>
+              Tap &quot;Pay Tax Refund&quot; whenever you want to hand the withheld amount back to
+              a kid, mimicking a real tax refund. It&apos;s a hands-on way to show where
+              withholding goes and that it does eventually come back.
+            </p>
+          </InfoTooltip>
+        </p>
         <p className="text-xs opacity-60">
           The Family Tax withheld from each allowance payment, ready to pay out as a reward.
         </p>
