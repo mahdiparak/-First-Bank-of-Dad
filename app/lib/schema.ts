@@ -147,9 +147,15 @@ export interface CashAdjustment {
   createdAt: string;
 }
 
-export interface ReconciliationSnapshot {
-  actualHysaBalance: number;
+export interface KidHysaBalance {
+  kidId: string;
+  balance: number;
   lastUpdatedAt: string;
+}
+
+/** Each kid has their own real-world HYSA account (e.g. separate Marcus accounts) — no shared family balance. */
+export interface ReconciliationSnapshot {
+  actualHysaBalances: KidHysaBalance[];
   cashAdjustments: CashAdjustment[];
 }
 
@@ -179,6 +185,27 @@ export interface FamilyBankState {
 }
 
 export const CURRENT_STATE_VERSION = 1;
+
+/**
+ * Older deployed state has a single family-wide `reconciliation.actualHysaBalance` number
+ * instead of the per-kid `actualHysaBalances` array. Rather than guessing how to split that
+ * single number across kids, this just resets to an empty per-kid list — the parent re-enters
+ * each kid's real balance once, which is a small one-time task.
+ */
+export function normalizeState(state: FamilyBankState): FamilyBankState {
+  const reconciliation = state.reconciliation as unknown as {
+    actualHysaBalances?: KidHysaBalance[];
+    cashAdjustments?: CashAdjustment[];
+  };
+  if (Array.isArray(reconciliation?.actualHysaBalances)) return state;
+  return {
+    ...state,
+    reconciliation: {
+      actualHysaBalances: [],
+      cashAdjustments: reconciliation?.cashAdjustments ?? [],
+    },
+  };
+}
 
 export const SPENDING_CATEGORIES = [
   { emoji: "🍕", label: "Food" },
@@ -215,8 +242,7 @@ export function createEmptyState(familyId: string): FamilyBankState {
       ],
     },
     reconciliation: {
-      actualHysaBalance: 0,
-      lastUpdatedAt: now,
+      actualHysaBalances: [],
       cashAdjustments: [],
     },
     updatedAt: now,

@@ -2,12 +2,15 @@
 
 import { useState } from "react";
 import {
+  actualHysaBalanceForKid,
   addCashAdjustment,
+  kidCashLiability,
   parentCashLiability,
   recordCashMovementForKid,
   removeCashAdjustment,
-  setActualHysaBalance,
+  setActualHysaBalanceForKid,
   virtualAppBalance,
+  virtualBalanceForKid,
 } from "@/lib/mutations";
 import type { FamilyBankState } from "@/lib/schema";
 
@@ -22,7 +25,6 @@ export function ReconciliationPanel({
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [hysaInput, setHysaInput] = useState(String(state.reconciliation.actualHysaBalance));
   const [movementKidId, setMovementKidId] = useState(state.kids[0]?.id ?? "");
   const [movementAmount, setMovementAmount] = useState("");
   const [movementDirection, setMovementDirection] = useState<"deposit" | "withdrawal">("deposit");
@@ -41,11 +43,6 @@ export function ReconciliationPanel({
 
   const virtual = virtualAppBalance(state);
   const liability = parentCashLiability(state);
-
-  function handleSaveHysa(event: React.FormEvent) {
-    event.preventDefault();
-    tryMutate((s) => setActualHysaBalance(s, Number(hysaInput)));
-  }
 
   function handleRecordMovement(event: React.FormEvent) {
     event.preventDefault();
@@ -76,8 +73,10 @@ export function ReconciliationPanel({
           <p className="text-xl font-semibold">{formatCurrency(virtual)}</p>
         </div>
         <div>
-          <p className="text-xs opacity-70">Actual HYSA balance</p>
-          <p className="text-xl font-semibold">{formatCurrency(state.reconciliation.actualHysaBalance)}</p>
+          <p className="text-xs opacity-70">Actual HYSA balance (all kids)</p>
+          <p className="text-xl font-semibold">
+            {formatCurrency(state.reconciliation.actualHysaBalances.reduce((sum, entry) => sum + entry.balance, 0))}
+          </p>
         </div>
         <div>
           <p className="text-xs opacity-70">{liability >= 0 ? "You still owe" : "Surplus in the HYSA"}</p>
@@ -87,23 +86,17 @@ export function ReconciliationPanel({
         </div>
       </div>
 
-      <form onSubmit={handleSaveHysa} className="flex flex-wrap items-end gap-2">
-        <label className="flex flex-col gap-1 text-xs opacity-70">
-          Update actual HYSA balance
-          <input
-            value={hysaInput}
-            onChange={(event) => setHysaInput(event.target.value)}
-            type="number"
-            step="0.01"
-            className={`${inputClass} w-32`}
-          />
-        </label>
-        <button type="submit" className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20">
-          Save
-        </button>
-      </form>
+      {state.kids.length === 0 ? (
+        <p className="text-sm opacity-70">Add a kid to start reconciling their real account.</p>
+      ) : (
+        <div className="space-y-3 border-t border-black/10 pt-3 dark:border-white/10">
+          <p className="text-sm opacity-70">Each kid&apos;s own real HYSA account</p>
+          {state.kids.map((kid) => (
+            <KidHysaRow key={kid.id} state={state} kidId={kid.id} kidName={kid.name} onMutate={tryMutate} />
+          ))}
+        </div>
+      )}
 
-      {state.kids.length > 0 && (
       <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
         <p className="text-sm opacity-70">Record a physical cash movement</p>
         <form onSubmit={handleRecordMovement} className="flex flex-wrap items-end gap-2">
@@ -111,6 +104,7 @@ export function ReconciliationPanel({
             value={movementKidId || state.kids[0]?.id || ""}
             onChange={(event) => setMovementKidId(event.target.value)}
             className={inputClass}
+            disabled={state.kids.length === 0}
           >
             {state.kids.map((kid) => (
               <option key={kid.id} value={kid.id}>
@@ -141,12 +135,15 @@ export function ReconciliationPanel({
             placeholder="Note (optional)"
             className={`${inputClass} flex-1`}
           />
-          <button type="submit" className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20">
+          <button
+            type="submit"
+            disabled={state.kids.length === 0}
+            className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+          >
             Record
           </button>
         </form>
       </div>
-      )}
 
       <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
         <p className="text-sm opacity-70">General adjustments (not tied to a kid, e.g. bank-paid interest)</p>
@@ -184,6 +181,59 @@ export function ReconciliationPanel({
         </form>
       </div>
     </section>
+  );
+}
+
+function KidHysaRow({
+  state,
+  kidId,
+  kidName,
+  onMutate,
+}: {
+  state: FamilyBankState;
+  kidId: string;
+  kidName: string;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const actual = actualHysaBalanceForKid(state, kidId);
+  const [hysaInput, setHysaInput] = useState(String(actual));
+  const virtual = virtualBalanceForKid(state, kidId);
+  const liability = kidCashLiability(state, kidId);
+
+  function handleSave(event: React.FormEvent) {
+    event.preventDefault();
+    onMutate((s) => setActualHysaBalanceForKid(s, kidId, Number(hysaInput)));
+  }
+
+  return (
+    <div className="rounded-lg border border-black/10 p-3 dark:border-white/10">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-medium">{kidName}</p>
+        <p className={`text-xs ${liability > 0 ? "text-red-500" : liability < 0 ? "text-green-600" : "opacity-60"}`}>
+          {liability === 0
+            ? "Reconciled"
+            : liability > 0
+              ? `You owe ${formatCurrency(liability)}`
+              : `Surplus ${formatCurrency(-liability)}`}
+        </p>
+      </div>
+      <p className="text-xs opacity-60">Virtual: {formatCurrency(virtual)}</p>
+      <form onSubmit={handleSave} className="mt-2 flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-xs opacity-70">
+          Real HYSA balance
+          <input
+            value={hysaInput}
+            onChange={(event) => setHysaInput(event.target.value)}
+            type="number"
+            step="0.01"
+            className={`${inputClass} w-32`}
+          />
+        </label>
+        <button type="submit" className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20">
+          Save
+        </button>
+      </form>
+    </div>
   );
 }
 

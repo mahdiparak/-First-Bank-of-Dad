@@ -273,6 +273,10 @@ export function removeKid(state: FamilyBankState, kidId: string): FamilyBankStat
         ? { ...bounty, status: "open" as const, claimedByKidId: undefined, claimedAt: undefined }
         : bounty,
     ),
+    reconciliation: {
+      ...state.reconciliation,
+      actualHysaBalances: state.reconciliation.actualHysaBalances.filter((entry) => entry.kidId !== kidId),
+    },
   });
 }
 
@@ -373,13 +377,23 @@ export function denyBounty(state: FamilyBankState, bountyId: string): FamilyBank
   });
 }
 
-/** The sum of every kid's cash balance plus the current value of their still-open mock investments. */
-export function virtualAppBalance(state: FamilyBankState): number {
-  const cash = state.kids.reduce((total, kid) => total + totalBalanceForKid(state, kid.id), 0);
+/** A single kid's cash balance plus the current value of their still-open mock investments. */
+export function virtualBalanceForKid(state: FamilyBankState, kidId: string): number {
+  const cash = totalBalanceForKid(state, kidId);
   const investments = state.investments
-    .filter((position) => !position.closedAt)
+    .filter((position) => position.kidId === kidId && !position.closedAt)
     .reduce((total, position) => total + position.currentValue, 0);
   return cash + investments;
+}
+
+/** The sum of every kid's cash balance plus the current value of their still-open mock investments. */
+export function virtualAppBalance(state: FamilyBankState): number {
+  return state.kids.reduce((total, kid) => total + virtualBalanceForKid(state, kid.id), 0);
+}
+
+/** What's actually sitting in this kid's own real-world HYSA account (e.g. their Marcus account) right now. */
+export function actualHysaBalanceForKid(state: FamilyBankState, kidId: string): number {
+  return state.reconciliation.actualHysaBalances.find((entry) => entry.kidId === kidId)?.balance ?? 0;
 }
 
 function sumCashAdjustments(state: FamilyBankState): number {
@@ -387,21 +401,34 @@ function sumCashAdjustments(state: FamilyBankState): number {
 }
 
 /**
- * What the parent still owes the kids beyond what's actually sitting in the real HYSA —
- * i.e. how much more real money needs to move into the account (or how much surplus exists,
- * if negative). Cash adjustments are manual corrections for money already reconciled outside
- * a specific kid's ledger (e.g. bank-paid interest not yet reflected).
+ * What the parent still owes this kid beyond what's actually sitting in their real HYSA — i.e.
+ * how much more real money needs to move into their account (or how much surplus exists, if
+ * negative).
  */
-export function parentCashLiability(state: FamilyBankState): number {
-  return virtualAppBalance(state) - state.reconciliation.actualHysaBalance - sumCashAdjustments(state);
+export function kidCashLiability(state: FamilyBankState, kidId: string): number {
+  return virtualBalanceForKid(state, kidId) - actualHysaBalanceForKid(state, kidId);
 }
 
-/** Parent-side: records what the real HYSA balance actually is right now. */
-export function setActualHysaBalance(state: FamilyBankState, amount: number): FamilyBankState {
-  return touch({
-    ...state,
-    reconciliation: { ...state.reconciliation, actualHysaBalance: amount, lastUpdatedAt: new Date().toISOString() },
-  });
+/**
+ * The family-wide total of every kid's liability, adjusted by general cash corrections not
+ * tied to any one kid (e.g. bank-paid interest not yet reflected).
+ */
+export function parentCashLiability(state: FamilyBankState): number {
+  const totalPerKid = state.kids.reduce((total, kid) => total + kidCashLiability(state, kid.id), 0);
+  return totalPerKid - sumCashAdjustments(state);
+}
+
+/** Parent-side: records what a specific kid's real HYSA account balance actually is right now. */
+export function setActualHysaBalanceForKid(state: FamilyBankState, kidId: string, amount: number): FamilyBankState {
+  const now = new Date().toISOString();
+  const existing = state.reconciliation.actualHysaBalances.some((entry) => entry.kidId === kidId);
+  const actualHysaBalances = existing
+    ? state.reconciliation.actualHysaBalances.map((entry) =>
+        entry.kidId === kidId ? { ...entry, balance: amount, lastUpdatedAt: now } : entry,
+      )
+    : [...state.reconciliation.actualHysaBalances, { kidId, balance: amount, lastUpdatedAt: now }];
+
+  return touch({ ...state, reconciliation: { ...state.reconciliation, actualHysaBalances } });
 }
 
 /**

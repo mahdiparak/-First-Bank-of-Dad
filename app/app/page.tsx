@@ -16,7 +16,7 @@ import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
 import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
-import { createEmptyState, kidAvatar, kidColor, type FamilyBankState } from "@/lib/schema";
+import { createEmptyState, kidAvatar, kidColor, normalizeState, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
   getOrCreateDeviceId,
@@ -163,10 +163,11 @@ export default function Home() {
     if (mutation.type === "snapshot") {
       // Last-write-wins by timestamp — fine for a handful of family
       // devices, not a general CRDT merge.
+      const incoming = normalizeState(mutation.state);
       setState((current) => {
-        if (current && current.updatedAt >= mutation.state.updatedAt) return current;
-        void saveState(mutation.state);
-        return mutation.state;
+        if (current && current.updatedAt >= incoming.updatedAt) return current;
+        void saveState(incoming);
+        return incoming;
       });
     } else {
       setState((current) => {

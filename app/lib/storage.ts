@@ -1,5 +1,5 @@
 import localforage from "localforage";
-import type { FamilyBankState } from "./schema";
+import { normalizeState, type FamilyBankState } from "./schema";
 
 const stateStore = localforage.createInstance({
   name: "first-bank-of-dad",
@@ -27,7 +27,8 @@ const MARKET_DATA_ADMIN_TOKEN_KEY = "market-data-admin-token";
 export type DeviceRole = "parent" | "kid";
 
 export async function loadState(): Promise<FamilyBankState | null> {
-  return stateStore.getItem<FamilyBankState>(STATE_KEY);
+  const state = await stateStore.getItem<FamilyBankState>(STATE_KEY);
+  return state ? normalizeState(state) : null;
 }
 
 export async function saveState(state: FamilyBankState): Promise<void> {
@@ -138,6 +139,7 @@ export async function importStateFromFile(file: File): Promise<FamilyBankState> 
   const text = await file.text();
   const parsed: unknown = JSON.parse(text);
   assertLooksLikeFamilyBankState(parsed);
-  await saveState(parsed);
-  return parsed;
+  const normalized = normalizeState(parsed);
+  await saveState(normalized);
+  return normalized;
 }
