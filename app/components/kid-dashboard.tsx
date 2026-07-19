@@ -23,7 +23,6 @@ import {
 } from "@/lib/schema";
 import { BadgeWall } from "./badge-wall";
 import { MoneyTimeline } from "./money-timeline";
-import { balanceHistory, Sparkline } from "./charts";
 import { InvestmentSandbox } from "./investment-sandbox";
 import type { MarketDataResponse } from "@/lib/market-data";
 
@@ -60,7 +59,7 @@ export function KidDashboard({
     return (
       <div className="space-y-6">
         {error && <p className="text-sm text-red-500">{error}</p>}
-        <YoungKidHome state={state} kid={kid} role={role} onMutate={tryMutate} />
+        <YoungKidHome state={state} kid={kid} role={role} marketData={marketData} onMutate={tryMutate} />
       </div>
     );
   }
@@ -93,7 +92,7 @@ export function KidDashboard({
 
       {error && <p className="text-sm text-red-500">{error}</p>}
 
-      {tab === "home" && <HomeTab state={state} kid={kid} role={role} onMutate={tryMutate} />}
+      {tab === "home" && <HomeTab state={state} kid={kid} role={role} marketData={marketData} onMutate={tryMutate} />}
       {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} onMutate={tryMutate} />}
       {tab === "invest" && <InvestmentSandbox state={state} kid={kid} marketData={marketData} onMutate={tryMutate} />}
       {tab === "bounties" && role === "kid" && <BountyBoard bounties={state.bounties} kid={kid} onMutate={tryMutate} />}
@@ -106,11 +105,13 @@ function HomeTab({
   state,
   kid,
   role,
+  marketData,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   role: "parent" | "kid";
+  marketData: MarketDataResponse | null;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const total = totalBalanceForKid(state, kid.id);
@@ -120,11 +121,13 @@ function HomeTab({
   const nextMilestone = state.parentSettings.dadMatchMilestones
     .filter((milestone) => milestone.weeks > streakWeeks)
     .sort((a, b) => a.weeks - b.weeks)[0];
-  const history = balanceHistory(state.transactions.filter((transaction) => transaction.kidId === kid.id));
   const color = kidColor(kid);
 
   return (
     <div className="space-y-6">
+      {/* The money story is the main screen: everything else hangs off this picture. */}
+      <MoneyTimeline state={state} kid={kid} marketData={marketData} />
+
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="rounded-xl border border-black/10 p-4 dark:border-white/10" style={{ borderTopWidth: 4, borderTopColor: color }}>
           <p className="text-sm opacity-70">Total balance</p>
@@ -134,7 +137,6 @@ function HomeTab({
               {formatCurrency(available)} available (rest saved toward goals or pending approval)
             </p>
           )}
-          <Sparkline values={history} color={color} />
         </div>
         <div className="rounded-xl border border-black/10 p-4 dark:border-white/10">
           <p className="text-sm opacity-70">Allowance</p>
@@ -163,8 +165,6 @@ function HomeTab({
         )}
       </section>
 
-      <MoneyTimeline state={state} kid={kid} />
-
       <BadgeWall state={state} kid={kid} />
     </div>
   );
@@ -174,11 +174,13 @@ function YoungKidHome({
   state,
   kid,
   role,
+  marketData,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   role: "parent" | "kid";
+  marketData: MarketDataResponse | null;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const total = totalBalanceForKid(state, kid.id);
@@ -206,6 +208,8 @@ function YoungKidHome({
           {days === 0 ? "💰 Payday is TODAY!" : `💰 ${days} more sleep${days === 1 ? "" : "s"} until payday`}
         </p>
       </section>
+
+      <MoneyTimeline state={state} kid={kid} marketData={marketData} />
 
       <section className="rounded-3xl border border-black/10 p-5 text-center dark:border-white/10">
         <p className="text-lg font-semibold">My saving streak</p>
@@ -251,9 +255,6 @@ function YoungKidHome({
           ))}
         </section>
       )}
-
-      {/* The timeline is a parent-facing teaching tool; the young-kid UI itself stays picture-first. */}
-      {role === "parent" && <MoneyTimeline state={state} kid={kid} />}
 
       {role === "parent" && <AllowanceEditor kid={kid} onMutate={onMutate} />}
     </div>
