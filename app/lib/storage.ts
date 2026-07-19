@@ -23,6 +23,7 @@ const DEFAULT_ROOM_ID_KEY = "default-room-id";
 const DEVICE_ID_KEY = "device-id";
 const DEVICE_ROLE_KEY = "device-role";
 const DEVICE_KID_ID_KEY = "device-kid-id";
+const DEVICE_PARENT_ID_KEY = "device-parent-id";
 const MARKET_DATA_ADMIN_TOKEN_KEY = "market-data-admin-token";
 
 export type DeviceRole = "parent" | "kid";
@@ -95,6 +96,19 @@ export async function saveDeviceKidId(kidId: string | null): Promise<void> {
     await keyStore.setItem(DEVICE_KID_ID_KEY, kidId);
   } else {
     await keyStore.removeItem(DEVICE_KID_ID_KEY);
+  }
+}
+
+/** Which named parent profile this device is "signed in" as, for a personalized greeting. */
+export async function loadDeviceParentId(): Promise<string | null> {
+  return keyStore.getItem<string>(DEVICE_PARENT_ID_KEY);
+}
+
+export async function saveDeviceParentId(parentId: string | null): Promise<void> {
+  if (parentId) {
+    await keyStore.setItem(DEVICE_PARENT_ID_KEY, parentId);
+  } else {
+    await keyStore.removeItem(DEVICE_PARENT_ID_KEY);
   }
 }
 

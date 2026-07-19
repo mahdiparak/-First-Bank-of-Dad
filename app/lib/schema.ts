@@ -31,6 +31,20 @@ function hashIndex(id: string, modulo: number): number {
   return Math.abs(hash) % modulo;
 }
 
+/** A named parent/guardian — lets the app greet whoever's using a device rather than a generic "Parent." */
+export interface ParentProfile {
+  id: string;
+  name: string;
+  avatar?: string;
+  createdAt: string;
+}
+
+export const PARENT_AVATARS = ["👨", "👩", "🧑", "👨‍🦰", "👩‍🦰", "🧔", "👱", "👴", "👵"] as const;
+
+export function parentAvatar(parent: ParentProfile): string {
+  return parent.avatar ?? PARENT_AVATARS[hashIndex(parent.id, PARENT_AVATARS.length)];
+}
+
 export type TransactionSource =
   | "allowance"
   | "bounty"
@@ -172,6 +186,7 @@ export interface FamilyBankState {
   version: number;
   familyId: string;
   kids: KidProfile[];
+  parentProfiles: ParentProfile[];
   transactions: Transaction[];
   goals: SavingsGoal[];
   bounties: Bounty[];
@@ -187,23 +202,28 @@ export interface FamilyBankState {
 export const CURRENT_STATE_VERSION = 1;
 
 /**
- * Older deployed state has a single family-wide `reconciliation.actualHysaBalance` number
- * instead of the per-kid `actualHysaBalances` array. Rather than guessing how to split that
- * single number across kids, this just resets to an empty per-kid list — the parent re-enters
- * each kid's real balance once, which is a small one-time task.
+ * Migrates state loaded from an older deploy so newer code never trips over a missing field.
+ * - `reconciliation.actualHysaBalance` (single family-wide number) is replaced by the per-kid
+ *   `actualHysaBalances` array. Rather than guessing how to split the old lump sum, this resets
+ *   to an empty per-kid list — the parent re-enters each kid's real balance once.
+ * - `parentProfiles` defaults to an empty array if the state predates named parent profiles.
  */
 export function normalizeState(state: FamilyBankState): FamilyBankState {
-  const reconciliation = state.reconciliation as unknown as {
-    actualHysaBalances?: KidHysaBalance[];
-    cashAdjustments?: CashAdjustment[];
+  const legacy = state as unknown as {
+    parentProfiles?: ParentProfile[];
+    reconciliation?: { actualHysaBalances?: KidHysaBalance[]; cashAdjustments?: CashAdjustment[] };
   };
-  if (Array.isArray(reconciliation?.actualHysaBalances)) return state;
+
+  const needsReconciliationFix = !Array.isArray(legacy.reconciliation?.actualHysaBalances);
+  const needsParentProfiles = !Array.isArray(legacy.parentProfiles);
+  if (!needsReconciliationFix && !needsParentProfiles) return state;
+
   return {
     ...state,
-    reconciliation: {
-      actualHysaBalances: [],
-      cashAdjustments: reconciliation?.cashAdjustments ?? [],
-    },
+    parentProfiles: needsParentProfiles ? [] : state.parentProfiles,
+    reconciliation: needsReconciliationFix
+      ? { actualHysaBalances: [], cashAdjustments: legacy.reconciliation?.cashAdjustments ?? [] }
+      : state.reconciliation,
   };
 }
 
@@ -224,6 +244,7 @@ export function createEmptyState(familyId: string): FamilyBankState {
     version: CURRENT_STATE_VERSION,
     familyId,
     kids: [],
+    parentProfiles: [],
     transactions: [],
     goals: [],
     bounties: [],

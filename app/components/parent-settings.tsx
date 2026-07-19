@@ -3,14 +3,25 @@
 import { useState } from "react";
 import { hashPin } from "@/lib/crypto";
 import {
+  addParentProfile,
   payTaxRefund,
   removeKid,
+  removeParentProfile,
   setDadMatchMilestones,
   setParentPinHash,
   updateKidProfile,
+  updateParentProfile,
   updateParentSettings,
 } from "@/lib/mutations";
-import { KID_AVATARS, kidAvatar, type FamilyBankState, type KidProfile } from "@/lib/schema";
+import {
+  KID_AVATARS,
+  kidAvatar,
+  PARENT_AVATARS,
+  parentAvatar,
+  type FamilyBankState,
+  type KidProfile,
+  type ParentProfile,
+} from "@/lib/schema";
 
 const inputClass =
   "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
@@ -31,6 +42,20 @@ export function ParentSettingsPanel({
   const [pin, setPin] = useState("");
   const [pinMessage, setPinMessage] = useState<string | null>(null);
   const [taxError, setTaxError] = useState<string | null>(null);
+  const [parentName, setParentName] = useState("");
+  const [parentAvatarChoice, setParentAvatarChoice] = useState<string>(PARENT_AVATARS[0]);
+  const [parentError, setParentError] = useState<string | null>(null);
+
+  function handleAddParent(event: React.FormEvent) {
+    event.preventDefault();
+    try {
+      setParentError(null);
+      onMutate((s) => addParentProfile(s, parentName, parentAvatarChoice));
+      setParentName("");
+    } catch (error) {
+      setParentError(error instanceof Error ? error.message : "Something went wrong.");
+    }
+  }
 
   function handlePayTaxRefund(kidId: string) {
     try {
@@ -109,6 +134,46 @@ export function ParentSettingsPanel({
           Save rates
         </button>
       </form>
+
+      <div className="space-y-3 border-t border-black/10 pt-3 dark:border-white/10">
+        <p className="text-sm opacity-70">Parents</p>
+        <p className="text-xs opacity-60">
+          Name each parent so a device can greet whoever&apos;s using it. Any parent has the same
+          full access — this is just for personalization, not permissions.
+        </p>
+        {parentError && <p className="text-sm text-red-500">{parentError}</p>}
+        {state.parentProfiles.length === 0 && <p className="text-xs opacity-60">No parents named yet.</p>}
+        {state.parentProfiles.map((parent) => (
+          <ParentProfileEditor key={parent.id} parent={parent} onMutate={onMutate} />
+        ))}
+        <form onSubmit={handleAddParent} className="space-y-2">
+          <div className="flex flex-wrap gap-1">
+            {PARENT_AVATARS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setParentAvatarChoice(option)}
+                className={`rounded-lg border-2 p-1 text-xl ${
+                  parentAvatarChoice === option ? "border-black dark:border-white" : "border-transparent"
+                }`}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={parentName}
+              onChange={(e) => setParentName(e.target.value)}
+              placeholder="Parent's name"
+              className={inputClass}
+            />
+            <button type="submit" className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">
+              Add parent
+            </button>
+          </div>
+        </form>
+      </div>
 
       <div className="space-y-3 border-t border-black/10 pt-3 dark:border-white/10">
         <p className="text-sm opacity-70">Kids</p>
@@ -212,6 +277,77 @@ export function ParentSettingsPanel({
         {pinMessage && <p className="text-xs opacity-60">{pinMessage}</p>}
       </form>
     </section>
+  );
+}
+
+function ParentProfileEditor({
+  parent,
+  onMutate,
+}: {
+  parent: ParentProfile;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(parent.name);
+  const [avatar, setAvatar] = useState(parentAvatar(parent));
+
+  function handleSave(event: React.FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) return;
+    onMutate((s) => updateParentProfile(s, parent.id, { name: name.trim(), avatar }));
+    setEditing(false);
+  }
+
+  function handleRemove() {
+    if (window.confirm(`Remove ${parent.name} from the parents list?`)) {
+      onMutate((s) => removeParentProfile(s, parent.id));
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex items-center justify-between text-sm">
+        <span>
+          {parentAvatar(parent)} {parent.name}
+        </span>
+        <div className="flex gap-3">
+          <button onClick={() => setEditing(true)} className="text-xs underline opacity-70">
+            Edit
+          </button>
+          <button onClick={handleRemove} className="text-xs text-red-500">
+            Remove
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSave} className="space-y-2 rounded-lg border border-black/10 p-3 dark:border-white/10">
+      <div className="flex flex-wrap gap-1">
+        {PARENT_AVATARS.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => setAvatar(option)}
+            className={`rounded-lg border-2 p-1 text-xl ${
+              avatar === option ? "border-black dark:border-white" : "border-transparent"
+            }`}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+        <button type="submit" className="rounded-md bg-black px-3 py-2 text-xs text-white dark:bg-white dark:text-black">
+          Save
+        </button>
+        <button type="button" onClick={() => setEditing(false)} className="text-xs opacity-70">
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 

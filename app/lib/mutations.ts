@@ -245,6 +245,36 @@ export function updateKidAllowance(
   });
 }
 
+/** Adds a named parent/guardian profile, so a device can greet whoever's using it by name. */
+export function addParentProfile(state: FamilyBankState, name: string, avatar?: string): FamilyBankState {
+  if (!name.trim()) throw new Error("Enter a name.");
+  return touch({
+    ...state,
+    parentProfiles: [
+      ...state.parentProfiles,
+      { id: crypto.randomUUID(), name: name.trim(), avatar, createdAt: new Date().toISOString() },
+    ],
+  });
+}
+
+export function updateParentProfile(
+  state: FamilyBankState,
+  parentId: string,
+  patch: { name?: string; avatar?: string },
+): FamilyBankState {
+  return touch({
+    ...state,
+    parentProfiles: state.parentProfiles.map((parent) => (parent.id === parentId ? { ...parent, ...patch } : parent)),
+  });
+}
+
+export function removeParentProfile(state: FamilyBankState, parentId: string): FamilyBankState {
+  return touch({
+    ...state,
+    parentProfiles: state.parentProfiles.filter((parent) => parent.id !== parentId),
+  });
+}
+
 /** Parent-only: rename a kid or change their avatar/color. */
 export function updateKidProfile(
   state: FamilyBankState,

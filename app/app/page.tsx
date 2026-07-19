@@ -18,19 +18,21 @@ import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
 import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
-import { createEmptyState, kidAvatar, kidColor, normalizeState, type FamilyBankState } from "@/lib/schema";
+import { createEmptyState, kidAvatar, kidColor, normalizeState, parentAvatar, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
   getOrCreateDeviceId,
   importStateFromFile,
   loadCryptoKey,
   loadDeviceKidId,
+  loadDeviceParentId,
   loadDeviceRole,
   loadRoomId,
   loadState,
   saveCryptoKey,
   saveDefaultRoomId,
   saveDeviceKidId,
+  saveDeviceParentId,
   saveDeviceRole,
   saveRoomId,
   saveState,
@@ -69,6 +71,7 @@ export default function Home() {
   const [parentTab, setParentTab] = useState<ParentTab>("kids");
   const [deviceRole, setDeviceRole] = useState<DeviceRole | null>(null);
   const [deviceKidId, setDeviceKidId] = useState<string | null>(null);
+  const [deviceParentId, setDeviceParentId] = useState<string | null>(null);
   const [showParentLogin, setShowParentLogin] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
   const [importError, setImportError] = useState<string | null>(null);
@@ -85,17 +88,19 @@ export default function Home() {
 
   useEffect(() => {
     void (async () => {
-      const [key, roomId, storedState, deviceId, role, kidId] = await Promise.all([
+      const [key, roomId, storedState, deviceId, role, kidId, parentId] = await Promise.all([
         loadCryptoKey(),
         loadRoomId(),
         loadState(),
         getOrCreateDeviceId(),
         loadDeviceRole(),
         loadDeviceKidId(),
+        loadDeviceParentId(),
       ]);
       deviceIdRef.current = deviceId;
       deviceRoleRef.current = role;
       setDeviceKidId(kidId);
+      setDeviceParentId(parentId);
 
       if (!key || !roomId) {
         setPhase("enter-phrase");
@@ -264,10 +269,19 @@ export default function Home() {
     commitState(mutator(state));
   }
 
-  function handleChooseParentRole() {
+  function handleChooseParentRole(parentId?: string) {
     deviceRoleRef.current = "parent";
     setDeviceRole("parent");
     void saveDeviceRole("parent");
+    if (parentId) {
+      setDeviceParentId(parentId);
+      void saveDeviceParentId(parentId);
+    }
+  }
+
+  function handleSetDeviceParentId(parentId: string) {
+    setDeviceParentId(parentId || null);
+    void saveDeviceParentId(parentId || null);
   }
 
   function handleChooseKidRole(kidId: string) {
@@ -278,9 +292,9 @@ export default function Home() {
     void saveDeviceKidId(kidId);
   }
 
-  function handleParentLoginSuccess() {
+  function handleParentLoginSuccess(parentId?: string) {
     setShowParentLogin(false);
-    handleChooseParentRole();
+    handleChooseParentRole(parentId);
   }
 
   function handleChangeRoomId(newRoomId: string) {
@@ -374,6 +388,7 @@ export default function Home() {
           {showParentLogin ? (
             <ParentLoginPrompt
               parentPinHash={state.parentSettings.parentPinHash}
+              parentProfiles={state.parentProfiles}
               onSuccess={handleParentLoginSuccess}
               onCancel={() => setShowParentLogin(false)}
             />
@@ -403,7 +418,23 @@ export default function Home() {
   return (
     <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
       <header className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">First Bank of Dad</h1>
+        <div>
+          <h1 className="text-xl font-semibold">First Bank of Dad</h1>
+          {state && state.parentProfiles.length > 0 && (
+            <select
+              value={deviceParentId ?? ""}
+              onChange={(event) => handleSetDeviceParentId(event.target.value)}
+              className="mt-0.5 rounded border border-black/20 bg-transparent px-1.5 py-0.5 text-xs dark:border-white/20"
+            >
+              <option value="">Who&apos;s using this device?</option>
+              {state.parentProfiles.map((parent) => (
+                <option key={parent.id} value={parent.id}>
+                  {parentAvatar(parent)} {parent.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         <SyncBadge status={syncStatus} />
       </header>
 
