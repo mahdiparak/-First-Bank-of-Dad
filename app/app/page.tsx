@@ -4,12 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AddKidForm, type AddKidFormValues } from "@/components/add-kid-form";
 import { ApprovalQueue } from "@/components/approval-queue";
 import { CelebrationOverlay } from "@/components/celebration-overlay";
+import { InstallAppButton } from "@/components/install-app-button";
 import { KidDashboard } from "@/components/kid-dashboard";
 import { MarketDataSettings } from "@/components/market-data-settings";
 import { MoneyTalk } from "@/components/money-talk";
 import { ParentSettingsPanel } from "@/components/parent-settings";
 import { ReconciliationPanel } from "@/components/reconciliation-panel";
 import { ParentLoginPrompt, RoleChooser } from "@/components/role-gate";
+import { SyncSettings } from "@/components/sync-settings";
 import { runScheduledEngines } from "@/lib/allowance";
 import { diffCelebrations, type CelebrationEvent } from "@/lib/celebrations";
 import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
@@ -27,6 +29,7 @@ import {
   loadRoomId,
   loadState,
   saveCryptoKey,
+  saveDefaultRoomId,
   saveDeviceKidId,
   saveDeviceRole,
   saveRoomId,
@@ -74,6 +77,7 @@ export default function Home() {
   const [celebrations, setCelebrations] = useState<CelebrationEvent[]>([]);
 
   const roomIdRef = useRef<string | null>(null);
+  const cryptoKeyRef = useRef<CryptoKey | null>(null);
   const deviceIdRef = useRef<string | null>(null);
   const deviceRoleRef = useRef<DeviceRole | null>(null);
   const syncClientRef = useRef<SyncClient | null>(null);
@@ -99,6 +103,7 @@ export default function Home() {
       }
 
       roomIdRef.current = roomId;
+      cryptoKeyRef.current = key;
       // Seed the celebration diff with the raw stored state, so anything the
       // engines pay out on this load (payday, interest, Dad Match) celebrates.
       prevStateRef.current = storedState;
@@ -189,8 +194,9 @@ export default function Home() {
     }
 
     const [key, roomId] = await Promise.all([deriveEncryptionKey(phrase), deriveRoomId(phrase)]);
-    await Promise.all([saveCryptoKey(key), saveRoomId(roomId)]);
+    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId)]);
     roomIdRef.current = roomId;
+    cryptoKeyRef.current = key;
     setPhraseInput("");
 
     const existing = await loadState();
@@ -277,6 +283,14 @@ export default function Home() {
     handleChooseParentRole();
   }
 
+  function handleChangeRoomId(newRoomId: string) {
+    if (newRoomId === roomIdRef.current) return;
+    syncClientRef.current?.disconnect();
+    roomIdRef.current = newRoomId;
+    void saveRoomId(newRoomId);
+    if (cryptoKeyRef.current) startSync(cryptoKeyRef.current, newRoomId);
+  }
+
   const activeCelebration =
     deviceRole === "kid" && deviceKidId
       ? (celebrations.find((event) => event.kidId === deviceKidId) ?? null)
@@ -353,6 +367,8 @@ export default function Home() {
         ) : (
           <p className="text-sm opacity-70">Ask a parent to set this device up.</p>
         )}
+
+        <InstallAppButton />
 
         <div className="pt-6">
           {showParentLogin ? (
@@ -487,8 +503,9 @@ export default function Home() {
           {parentTab === "settings" && (
             <>
               <ParentSettingsPanel state={state} onMutate={handleMutate} />
+              <SyncSettings onSave={handleChangeRoomId} />
               <MarketDataSettings marketData={marketData} onMarketDataRefreshed={setMarketData} />
-              <section className="flex flex-wrap gap-3">
+              <section className="flex flex-wrap items-center gap-3">
                 <button
                   onClick={() => exportStateToFile(state)}
                   className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
@@ -505,6 +522,7 @@ export default function Home() {
                 >
                   Sync now
                 </button>
+                <InstallAppButton />
               </section>
               {importError && <p className="text-sm text-red-500">{importError}</p>}
             </>

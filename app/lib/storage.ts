@@ -19,6 +19,7 @@ const keyStore = localforage.createInstance({
 const STATE_KEY = "family-bank-state";
 const CRYPTO_KEY_KEY = "encryption-key";
 const ROOM_ID_KEY = "room-id";
+const DEFAULT_ROOM_ID_KEY = "default-room-id";
 const DEVICE_ID_KEY = "device-id";
 const DEVICE_ROLE_KEY = "device-role";
 const DEVICE_KID_ID_KEY = "device-kid-id";
@@ -53,6 +54,15 @@ export async function loadRoomId(): Promise<string | null> {
 
 export async function saveRoomId(roomId: string): Promise<void> {
   await keyStore.setItem(ROOM_ID_KEY, roomId);
+}
+
+/** The room id as originally derived from the Family Phrase at onboarding — the "Use default" target. */
+export async function loadDefaultRoomId(): Promise<string | null> {
+  return keyStore.getItem<string>(DEFAULT_ROOM_ID_KEY);
+}
+
+export async function saveDefaultRoomId(roomId: string): Promise<void> {
+  await keyStore.setItem(DEFAULT_ROOM_ID_KEY, roomId);
 }
 
 /** Forgets the derived key/room id (e.g. "log out"). The Family Phrase itself was never stored. */
