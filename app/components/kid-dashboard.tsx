@@ -22,6 +22,7 @@ import {
   type KidProfile,
 } from "@/lib/schema";
 import { BadgeWall } from "./badge-wall";
+import { MoneyTimeline } from "./money-timeline";
 import { balanceHistory, Sparkline } from "./charts";
 import { InvestmentSandbox } from "./investment-sandbox";
 import type { MarketDataResponse } from "@/lib/market-data";
@@ -162,6 +163,8 @@ function HomeTab({
         )}
       </section>
 
+      <MoneyTimeline state={state} kid={kid} />
+
       <BadgeWall state={state} kid={kid} />
     </div>
   );
@@ -248,6 +251,9 @@ function YoungKidHome({
           ))}
         </section>
       )}
+
+      {/* The timeline is a parent-facing teaching tool; the young-kid UI itself stays picture-first. */}
+      {role === "parent" && <MoneyTimeline state={state} kid={kid} />}
 
       {role === "parent" && <AllowanceEditor kid={kid} onMutate={onMutate} />}
     </div>
