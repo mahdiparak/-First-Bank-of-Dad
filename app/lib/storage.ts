@@ -24,6 +24,7 @@ const DEVICE_ID_KEY = "device-id";
 const DEVICE_ROLE_KEY = "device-role";
 const DEVICE_KID_ID_KEY = "device-kid-id";
 const DEVICE_PARENT_ID_KEY = "device-parent-id";
+const INSTALL_BANNER_DISMISSED_KEY = "install-banner-dismissed";
 const MARKET_DATA_ADMIN_TOKEN_KEY = "market-data-admin-token";
 
 export type DeviceRole = "parent" | "kid";
@@ -110,6 +111,15 @@ export async function saveDeviceParentId(parentId: string | null): Promise<void>
   } else {
     await keyStore.removeItem(DEVICE_PARENT_ID_KEY);
   }
+}
+
+/** Device-local: once someone dismisses the install banner on this device, stop showing it. */
+export async function loadInstallBannerDismissed(): Promise<boolean> {
+  return Boolean(await keyStore.getItem<boolean>(INSTALL_BANNER_DISMISSED_KEY));
+}
+
+export async function saveInstallBannerDismissed(dismissed: boolean): Promise<void> {
+  await keyStore.setItem(INSTALL_BANNER_DISMISSED_KEY, dismissed);
 }
 
 // The market-data Worker's admin bearer token — local to this device only, and never part of

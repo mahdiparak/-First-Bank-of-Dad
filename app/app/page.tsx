@@ -4,21 +4,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AddKidForm, type AddKidFormValues } from "@/components/add-kid-form";
 import { ApprovalQueue } from "@/components/approval-queue";
 import { CelebrationOverlay } from "@/components/celebration-overlay";
-import { InstallAppButton } from "@/components/install-app-button";
+import { InstallBanner } from "@/components/install-banner";
 import { KidDashboard } from "@/components/kid-dashboard";
 import { MarketDataSettings } from "@/components/market-data-settings";
 import { MoneyTalk } from "@/components/money-talk";
 import { ParentSettingsPanel } from "@/components/parent-settings";
+import { ProfilePanel } from "@/components/profile-panel";
+import { ProfileSettingsPanel } from "@/components/profile-settings";
 import { ReconciliationPanel } from "@/components/reconciliation-panel";
-import { ParentLoginPrompt, RoleChooser } from "@/components/role-gate";
+import { RoleChooser } from "@/components/role-gate";
 import { SyncSettings } from "@/components/sync-settings";
 import { runScheduledEngines } from "@/lib/allowance";
+import { resolveRoleFromAccessIdentity } from "@/lib/access-identity";
 import { diffCelebrations, type CelebrationEvent } from "@/lib/celebrations";
 import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
 import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
-import { createEmptyState, kidAvatar, kidColor, normalizeState, parentAvatar, type FamilyBankState } from "@/lib/schema";
+import { createEmptyState, kidAvatar, kidColor, normalizeState, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
   getOrCreateDeviceId,
@@ -43,7 +46,7 @@ import { SyncClient, type SyncMutation, type SyncStatus } from "@/lib/sync";
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "";
 
 type Phase = "loading" | "enter-phrase" | "ready";
-type ParentTab = "kids" | "approvals" | "money" | "talk" | "settings";
+type ParentTab = "kids" | "approvals" | "money" | "talk" | "profile" | "family" | "app";
 
 function primeState(loaded: FamilyBankState | null): FamilyBankState | null {
   if (!loaded) return null;
@@ -62,6 +65,31 @@ async function resolveBootstrapRole(currentRole: DeviceRole | null, state: Famil
   return null;
 }
 
+interface InitialRole {
+  role: DeviceRole | null;
+  parentId?: string;
+  kidId?: string;
+}
+
+/**
+ * Only runs when this device has never chosen a role. First tries the family-PIN-less
+ * bootstrap case, then — for a device signed into Cloudflare Access as a named parent or
+ * kid — matches that email against parentProfiles/kids so the right dashboard just opens,
+ * no RoleChooser needed. A device that already picked a role keeps it on every later load.
+ */
+async function resolveInitialRole(currentRole: DeviceRole | null, state: FamilyBankState): Promise<InitialRole> {
+  const bootstrapped = await resolveBootstrapRole(currentRole, state);
+  if (bootstrapped) return { role: bootstrapped };
+
+  const match = await resolveRoleFromAccessIdentity(state);
+  if (!match) return { role: null };
+
+  await saveDeviceRole(match.role);
+  if (match.role === "parent" && match.parentId) await saveDeviceParentId(match.parentId);
+  if (match.role === "kid" && match.kidId) await saveDeviceKidId(match.kidId);
+  return { role: match.role, parentId: match.parentId, kidId: match.kidId };
+}
+
 export default function Home() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [phraseInput, setPhraseInput] = useState("");
@@ -72,7 +100,6 @@ export default function Home() {
   const [deviceRole, setDeviceRole] = useState<DeviceRole | null>(null);
   const [deviceKidId, setDeviceKidId] = useState<string | null>(null);
   const [deviceParentId, setDeviceParentId] = useState<string | null>(null);
-  const [showParentLogin, setShowParentLogin] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
   const [importError, setImportError] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<MarketDataResponse | null>(null);
@@ -115,9 +142,11 @@ export default function Home() {
       const primed = primeState(storedState);
       setState(primed);
       if (primed) {
-        const resolvedRole = await resolveBootstrapRole(role, primed);
-        deviceRoleRef.current = resolvedRole;
-        setDeviceRole(resolvedRole);
+        const resolved = await resolveInitialRole(role, primed);
+        deviceRoleRef.current = resolved.role;
+        setDeviceRole(resolved.role);
+        if (resolved.parentId) setDeviceParentId(resolved.parentId);
+        if (resolved.kidId) setDeviceKidId(resolved.kidId);
       } else {
         setDeviceRole(role);
       }
@@ -209,9 +238,11 @@ export default function Home() {
     const primed = primeState(existing);
     setState(primed);
     if (primed) {
-      const resolvedRole = await resolveBootstrapRole(deviceRoleRef.current, primed);
-      deviceRoleRef.current = resolvedRole;
-      setDeviceRole(resolvedRole);
+      const resolved = await resolveInitialRole(deviceRoleRef.current, primed);
+      deviceRoleRef.current = resolved.role;
+      setDeviceRole(resolved.role);
+      if (resolved.parentId) setDeviceParentId(resolved.parentId);
+      if (resolved.kidId) setDeviceKidId(resolved.kidId);
     }
     setPhase("ready");
     startSync(key, roomId);
@@ -225,9 +256,11 @@ export default function Home() {
       const imported = await importStateFromFile(file);
       commitState(imported);
       setImportError(null);
-      const resolvedRole = await resolveBootstrapRole(deviceRoleRef.current, imported);
-      deviceRoleRef.current = resolvedRole;
-      setDeviceRole(resolvedRole);
+      const resolved = await resolveInitialRole(deviceRoleRef.current, imported);
+      deviceRoleRef.current = resolved.role;
+      setDeviceRole(resolved.role);
+      if (resolved.parentId) setDeviceParentId(resolved.parentId);
+      if (resolved.kidId) setDeviceKidId(resolved.kidId);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "Import failed.");
     }
@@ -292,11 +325,6 @@ export default function Home() {
     void saveDeviceKidId(kidId);
   }
 
-  function handleParentLoginSuccess(parentId?: string) {
-    setShowParentLogin(false);
-    handleChooseParentRole(parentId);
-  }
-
   function handleChangeRoomId(newRoomId: string) {
     if (newRoomId === roomIdRef.current) return;
     syncClientRef.current?.disconnect();
@@ -352,9 +380,12 @@ export default function Home() {
 
   if (state && deviceRole === null) {
     return (
-      <main className="flex flex-1 items-center justify-center p-6">
-        <RoleChooser state={state} onChooseParent={handleChooseParentRole} onChooseKid={handleChooseKidRole} />
-      </main>
+      <>
+        <InstallBanner />
+        <main className="flex flex-1 items-center justify-center p-6">
+          <RoleChooser state={state} onChooseParent={handleChooseParentRole} onChooseKid={handleChooseKidRole} />
+        </main>
+      </>
     );
   }
 
@@ -367,38 +398,35 @@ export default function Home() {
   if (state && deviceRole === "kid") {
     const kid = state.kids.find((candidate) => candidate.id === deviceKidId);
     return (
-      <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
-        {activeCelebration && <CelebrationOverlay event={activeCelebration} onDismiss={dismissCelebration} />}
-        <header className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">
-            {kid ? `${kidAvatar(kid)} ${kid.name}'s Bank` : "First Bank of Dad"}
-          </h1>
-          <SyncBadge status={syncStatus} />
-        </header>
+      <>
+        <InstallBanner />
+        <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
+          {activeCelebration && <CelebrationOverlay event={activeCelebration} onDismiss={dismissCelebration} />}
+          <header className="flex items-center justify-between">
+            <h1 className="text-xl font-semibold">
+              {kid ? `${kidAvatar(kid)} ${kid.name}'s Bank` : "First Bank of Dad"}
+            </h1>
+            <div className="flex items-center gap-3">
+              <SyncBadge status={syncStatus} />
+              <ProfilePanel
+                state={state}
+                role="kid"
+                deviceParentId={deviceParentId}
+                deviceKidId={deviceKidId}
+                onMutate={handleMutate}
+                onSetDeviceParentId={handleSetDeviceParentId}
+                onSwitchToParent={handleChooseParentRole}
+              />
+            </div>
+          </header>
 
-        {kid ? (
-          <KidDashboard state={state} kid={kid} role="kid" marketData={marketData} onMutate={handleMutate} />
-        ) : (
-          <p className="text-sm opacity-70">Ask a parent to set this device up.</p>
-        )}
-
-        <InstallAppButton />
-
-        <div className="pt-6">
-          {showParentLogin ? (
-            <ParentLoginPrompt
-              parentPinHash={state.parentSettings.parentPinHash}
-              parentProfiles={state.parentProfiles}
-              onSuccess={handleParentLoginSuccess}
-              onCancel={() => setShowParentLogin(false)}
-            />
+          {kid ? (
+            <KidDashboard state={state} kid={kid} role="kid" marketData={marketData} onMutate={handleMutate} />
           ) : (
-            <button onClick={() => setShowParentLogin(true)} className="text-xs opacity-50 underline">
-              Parent Login
-            </button>
+            <p className="text-sm opacity-70">Ask a parent to set this device up.</p>
           )}
-        </div>
-      </main>
+        </main>
+      </>
     );
   }
 
@@ -407,7 +435,9 @@ export default function Home() {
     { id: "approvals", label: "✅ Approvals" },
     { id: "money", label: "🏦 Money" },
     { id: "talk", label: "💬 Money Talk" },
-    { id: "settings", label: "⚙️ Settings" },
+    { id: "profile", label: "👤 Profile" },
+    { id: "family", label: "📈 Family Settings" },
+    { id: "app", label: "🛠️ App Settings" },
   ];
 
   const pendingCount = state
@@ -416,27 +446,26 @@ export default function Home() {
     : 0;
 
   return (
-    <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
-      <header className="flex items-center justify-between">
-        <div>
+    <>
+      <InstallBanner />
+      <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
+        <header className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">First Bank of Dad</h1>
-          {state && state.parentProfiles.length > 0 && (
-            <select
-              value={deviceParentId ?? ""}
-              onChange={(event) => handleSetDeviceParentId(event.target.value)}
-              className="mt-0.5 rounded border border-black/20 bg-transparent px-1.5 py-0.5 text-xs dark:border-white/20"
-            >
-              <option value="">Who&apos;s using this device?</option>
-              {state.parentProfiles.map((parent) => (
-                <option key={parent.id} value={parent.id}>
-                  {parentAvatar(parent)} {parent.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-        <SyncBadge status={syncStatus} />
-      </header>
+          <div className="flex items-center gap-3">
+            <SyncBadge status={syncStatus} />
+            {state && (
+              <ProfilePanel
+                state={state}
+                role="parent"
+                deviceParentId={deviceParentId}
+                deviceKidId={deviceKidId}
+                onMutate={handleMutate}
+                onSetDeviceParentId={handleSetDeviceParentId}
+                onSwitchToParent={handleChooseParentRole}
+              />
+            )}
+          </div>
+        </header>
 
       {!state ? (
         <section className="space-y-4 rounded-xl border border-black/10 p-6 dark:border-white/10">
@@ -531,9 +560,12 @@ export default function Home() {
 
           {parentTab === "talk" && <MoneyTalk state={state} />}
 
-          {parentTab === "settings" && (
+          {parentTab === "profile" && <ProfileSettingsPanel state={state} onMutate={handleMutate} />}
+
+          {parentTab === "family" && <ParentSettingsPanel state={state} onMutate={handleMutate} />}
+
+          {parentTab === "app" && (
             <>
-              <ParentSettingsPanel state={state} onMutate={handleMutate} />
               <SyncSettings onSave={handleChangeRoomId} />
               <MarketDataSettings marketData={marketData} onMarketDataRefreshed={setMarketData} />
               <section className="flex flex-wrap items-center gap-3">
@@ -553,14 +585,14 @@ export default function Home() {
                 >
                   Sync now
                 </button>
-                <InstallAppButton />
               </section>
               {importError && <p className="text-sm text-red-500">{importError}</p>}
             </>
           )}
         </>
       )}
-    </main>
+      </main>
+    </>
   );
 }
 

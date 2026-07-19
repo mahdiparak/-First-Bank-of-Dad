@@ -260,7 +260,7 @@ export function addParentProfile(state: FamilyBankState, name: string, avatar?: 
 export function updateParentProfile(
   state: FamilyBankState,
   parentId: string,
-  patch: { name?: string; avatar?: string },
+  patch: { name?: string; avatar?: string; email?: string },
 ): FamilyBankState {
   return touch({
     ...state,
@@ -275,11 +275,28 @@ export function removeParentProfile(state: FamilyBankState, parentId: string): F
   });
 }
 
-/** Parent-only: rename a kid or change their avatar/color. */
+/** Sets, changes, or (passing null) removes this parent's own PIN. Any parent can change any parent's PIN. */
+export function setParentProfilePin(state: FamilyBankState, parentId: string, pinHash: string | null): FamilyBankState {
+  return touch({
+    ...state,
+    parentProfiles: state.parentProfiles.map((parent) => {
+      if (parent.id !== parentId) return parent;
+      const next = { ...parent };
+      if (pinHash) {
+        next.pinHash = pinHash;
+      } else {
+        delete next.pinHash;
+      }
+      return next;
+    }),
+  });
+}
+
+/** Parent-only: rename a kid, change their avatar/color, or set the email for a kid with their own device. */
 export function updateKidProfile(
   state: FamilyBankState,
   kidId: string,
-  patch: { name?: string; avatar?: string; color?: string; age?: number },
+  patch: { name?: string; avatar?: string; color?: string; age?: number; email?: string },
 ): FamilyBankState {
   return touch({
     ...state,

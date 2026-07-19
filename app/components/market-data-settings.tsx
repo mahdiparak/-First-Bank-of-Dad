@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { setAlphaVantageApiKey, triggerMarketDataRefresh } from "@/lib/market-admin";
 import { loadMarketDataAdminToken, saveMarketDataAdminToken } from "@/lib/storage";
+import { InfoTooltip } from "./info-tooltip";
 
 const inputClass =
   "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
@@ -109,17 +110,28 @@ export function MarketDataSettings({
         />
       </label>
 
-      <form onSubmit={handleSaveApiKey} className="flex flex-wrap gap-2">
-        <input
-          value={apiKey}
-          onChange={(event) => setApiKey(event.target.value)}
-          type="password"
-          placeholder="Alpha Vantage API key"
-          className={`${inputClass} flex-1`}
-        />
-        <button type="submit" disabled={busy} className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">
-          Save key
-        </button>
+      <form onSubmit={handleSaveApiKey} className="space-y-2">
+        <div className="flex items-center text-xs opacity-70">
+          Alpha Vantage API key
+          <InfoTooltip label="How do I get an Alpha Vantage API key?">
+            <p>1. Go to alphavantage.co/support/#api-key.</p>
+            <p>2. Enter your email — it&apos;s free, no credit card needed.</p>
+            <p>3. Copy the key it shows you (also emailed to you).</p>
+            <p>4. Paste it below and tap &quot;Save key.&quot;</p>
+          </InfoTooltip>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+            type="password"
+            placeholder="Alpha Vantage API key"
+            className={`${inputClass} flex-1`}
+          />
+          <button type="submit" disabled={busy} className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">
+            Save key
+          </button>
+        </div>
       </form>
 
       <button

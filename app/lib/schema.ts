@@ -9,6 +9,8 @@ export interface KidProfile {
   lastInterestPaidAt?: string;
   avatar?: string; // emoji
   color?: string; // hex accent color
+  /** Only set for a kid with their own device/login (e.g. an older kid) — matches Cloudflare Access identity to auto-open their view. */
+  email?: string;
 }
 
 /** Kids under this age get the simplified, picture-first UI. */
@@ -37,6 +39,10 @@ export interface ParentProfile {
   name: string;
   avatar?: string;
   createdAt: string;
+  /** Matches Cloudflare Access identity so logging in with this email auto-opens this parent's dashboard. */
+  email?: string;
+  /** This parent's own PIN (SHA-256 hash) for the Kid View -> Parent switch. Falls back to the shared parentSettings.parentPinHash if unset. */
+  pinHash?: string;
 }
 
 export const PARENT_AVATARS = ["👨", "👩", "🧑", "👨‍🦰", "👩‍🦰", "🧔", "👱", "👴", "👵"] as const;

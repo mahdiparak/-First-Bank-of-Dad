@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { hashPin } from "@/lib/crypto";
+import { hasParentPinGate, verifyParentPin } from "@/lib/parent-auth";
 import { parentAvatar, type FamilyBankState } from "@/lib/schema";
 
 /** Shown on a device with no locally-remembered role once a Parent PIN already exists elsewhere in the family. */
@@ -18,8 +18,10 @@ export function RoleChooser({
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  function afterUnlock() {
-    if (state.parentProfiles.length > 1) {
+  function afterUnlock(parentId?: string) {
+    if (parentId) {
+      onChooseParent(parentId);
+    } else if (state.parentProfiles.length > 1) {
       setMode("pick-parent");
     } else {
       onChooseParent(state.parentProfiles[0]?.id);
@@ -27,7 +29,7 @@ export function RoleChooser({
   }
 
   function handleParentClick() {
-    if (!state.parentSettings.parentPinHash) {
+    if (!hasParentPinGate(state)) {
       afterUnlock();
       return;
     }
@@ -36,9 +38,9 @@ export function RoleChooser({
 
   async function handlePinSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const hash = await hashPin(pin);
-    if (hash === state.parentSettings.parentPinHash) {
-      afterUnlock();
+    const result = await verifyParentPin(state, pin);
+    if (result.ok) {
+      afterUnlock(result.parentId);
     } else {
       setError("Wrong PIN.");
       setPin("");
@@ -51,7 +53,7 @@ export function RoleChooser({
         onSubmit={handlePinSubmit}
         className="w-full max-w-sm space-y-3 rounded-xl border border-black/10 p-6 dark:border-white/10"
       >
-        <h1 className="text-lg font-semibold">Enter the Parent PIN</h1>
+        <h1 className="text-lg font-semibold">Enter your Parent PIN</h1>
         <input
           type="password"
           inputMode="numeric"
@@ -138,15 +140,13 @@ export function RoleChooser({
   );
 }
 
-/** The "Parent Login" escape hatch shown at the bottom of a locked-down Kid View. */
+/** The "Switch to Parent" flow — shown inline from the Kid View's profile panel. */
 export function ParentLoginPrompt({
-  parentPinHash,
-  parentProfiles,
+  state,
   onSuccess,
   onCancel,
 }: {
-  parentPinHash?: string;
-  parentProfiles: FamilyBankState["parentProfiles"];
+  state: FamilyBankState;
   onSuccess: (parentId?: string) => void;
   onCancel: () => void;
 }) {
@@ -154,23 +154,25 @@ export function ParentLoginPrompt({
   const [error, setError] = useState<string | null>(null);
   const [pickingParent, setPickingParent] = useState(false);
 
-  function afterUnlock() {
-    if (parentProfiles.length > 1) {
+  function afterUnlock(parentId?: string) {
+    if (parentId) {
+      onSuccess(parentId);
+    } else if (state.parentProfiles.length > 1) {
       setPickingParent(true);
     } else {
-      onSuccess(parentProfiles[0]?.id);
+      onSuccess(state.parentProfiles[0]?.id);
     }
   }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!parentPinHash) {
+    if (!hasParentPinGate(state)) {
       afterUnlock();
       return;
     }
-    const hash = await hashPin(pin);
-    if (hash === parentPinHash) {
-      afterUnlock();
+    const result = await verifyParentPin(state, pin);
+    if (result.ok) {
+      afterUnlock(result.parentId);
     } else {
       setError("Wrong PIN.");
       setPin("");
@@ -179,10 +181,10 @@ export function ParentLoginPrompt({
 
   if (pickingParent) {
     return (
-      <div className="w-full max-w-xs space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
+      <div className="w-full space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
         <p className="text-sm font-semibold">Which parent is this?</p>
         <div className="flex flex-wrap gap-2">
-          {parentProfiles.map((parent) => (
+          {state.parentProfiles.map((parent) => (
             <button
               key={parent.id}
               onClick={() => onSuccess(parent.id)}
@@ -200,18 +202,15 @@ export function ParentLoginPrompt({
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="w-full max-w-xs space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10"
-    >
-      <p className="text-sm font-semibold">Parent Login</p>
-      {parentPinHash && (
+    <form onSubmit={handleSubmit} className="w-full space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
+      <p className="text-sm font-semibold">Switch to Parent</p>
+      {hasParentPinGate(state) && (
         <input
           type="password"
           inputMode="numeric"
           value={pin}
           onChange={(event) => setPin(event.target.value)}
-          placeholder="PIN"
+          placeholder="Parent PIN"
           className="w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent"
           autoFocus
         />
@@ -222,7 +221,7 @@ export function ParentLoginPrompt({
           type="submit"
           className="flex-1 rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
         >
-          {parentPinHash ? "Unlock" : "Continue"}
+          {hasParentPinGate(state) ? "Unlock" : "Continue"}
         </button>
         <button
           type="button"
