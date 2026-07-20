@@ -7,9 +7,11 @@ import {
   removeKid,
   removeParentProfile,
   setParentProfilePin,
+  updateKidAllowance,
   updateKidProfile,
   updateParentProfile,
 } from "@/lib/mutations";
+import { AddKidForm, type AddKidFormValues } from "./add-kid-form";
 import {
   KID_AVATARS,
   kidAvatar,
@@ -23,13 +25,19 @@ import {
 const inputClass =
   "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
 
-/** Who's who: naming parents and kids, their avatars, login emails, and each parent's own PIN. */
+/**
+ * The one place for people-management: naming parents and kids, avatars, login emails, each
+ * parent's own PIN, each kid's allowance/payday, and adding a new kid. Deliberately consolidated
+ * here so none of it clutters the day-to-day dashboards.
+ */
 export function ProfileSettingsPanel({
   state,
   onMutate,
+  onAddKid,
 }: {
   state: FamilyBankState;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+  onAddKid: (values: AddKidFormValues) => void;
 }) {
   const [parentName, setParentName] = useState("");
   const [parentAvatarChoice, setParentAvatarChoice] = useState<string>(PARENT_AVATARS[0]);
@@ -102,6 +110,7 @@ export function ProfileSettingsPanel({
         {state.kids.map((kid) => (
           <KidProfileEditor key={kid.id} kid={kid} onMutate={onMutate} />
         ))}
+        <AddKidForm onSubmit={onAddKid} />
       </div>
     </section>
   );
@@ -232,6 +241,8 @@ function ParentProfileEditor({
   );
 }
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 function KidProfileEditor({
   kid,
   onMutate,
@@ -243,12 +254,28 @@ function KidProfileEditor({
   const [name, setName] = useState(kid.name);
   const [avatar, setAvatar] = useState(kidAvatar(kid));
   const [email, setEmail] = useState(kid.email ?? "");
+  const [age, setAge] = useState(String(kid.age));
+  const [allowance, setAllowance] = useState(String(kid.weeklyAllowance));
+  const [payday, setPayday] = useState(String(kid.paydayWeekday));
+  const [error, setError] = useState<string | null>(null);
 
   function handleSave(event: React.FormEvent) {
     event.preventDefault();
     if (!name.trim()) return;
-    onMutate((s) => updateKidProfile(s, kid.id, { name: name.trim(), avatar, email: email.trim() }));
-    setEditing(false);
+    try {
+      setError(null);
+      onMutate((s) =>
+        updateKidAllowance(
+          updateKidProfile(s, kid.id, { name: name.trim(), avatar, email: email.trim(), age: Number(age) || kid.age }),
+          kid.id,
+          Number(allowance),
+          Number(payday),
+        ),
+      );
+      setEditing(false);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Something went wrong.");
+    }
   }
 
   function handleRemove() {
@@ -265,7 +292,8 @@ function KidProfileEditor({
     return (
       <div className="flex items-center justify-between text-sm">
         <span>
-          {kidAvatar(kid)} {kid.name} (age {kid.age})
+          {kidAvatar(kid)} {kid.name} (age {kid.age}) · {formatCurrency(kid.weeklyAllowance)}/wk on{" "}
+          {WEEKDAYS[kid.paydayWeekday]}
           {kid.email && <span className="opacity-60"> · {kid.email}</span>}
         </span>
         <div className="flex gap-3">
@@ -296,8 +324,39 @@ function KidProfileEditor({
           </button>
         ))}
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="Name" />
+        <input
+          value={age}
+          onChange={(e) => setAge(e.target.value)}
+          type="number"
+          min={0}
+          placeholder="Age"
+          className={`${inputClass} w-20`}
+        />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <label className="flex flex-col gap-1 text-xs opacity-70">
+          Allowance $/wk
+          <input
+            value={allowance}
+            onChange={(e) => setAllowance(e.target.value)}
+            type="number"
+            min={0}
+            step="0.01"
+            className={`${inputClass} w-28`}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs opacity-70">
+          Payday
+          <select value={payday} onChange={(e) => setPayday(e.target.value)} className={inputClass}>
+            {WEEKDAYS.map((label, index) => (
+              <option key={label} value={index}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <div className="flex gap-2">
         <input
@@ -308,6 +367,7 @@ function KidProfileEditor({
           className={`${inputClass} flex-1`}
         />
       </div>
+      {error && <p className="text-sm text-red-500">{error}</p>}
       <div className="flex gap-2">
         <button type="submit" className="rounded-md bg-black px-3 py-2 text-xs text-white dark:bg-white dark:text-black">
           Save
@@ -318,4 +378,8 @@ function KidProfileEditor({
       </div>
     </form>
   );
+}
+
+function formatCurrency(amount: number): string {
+  return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }

@@ -11,7 +11,6 @@ import {
   requestGoalSpend,
   requestWithdrawal,
   totalBalanceForKid,
-  updateKidAllowance,
 } from "@/lib/mutations";
 import {
   kidColor,
@@ -25,8 +24,6 @@ import { BadgeWall } from "./badge-wall";
 import { MoneyTimeline } from "./money-timeline";
 import { InvestmentSandbox } from "./investment-sandbox";
 import type { MarketDataResponse } from "@/lib/market-data";
-
-const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 type KidTab = "home" | "goals" | "invest" | "bounties" | "ledger";
 
@@ -92,7 +89,7 @@ export function KidDashboard({
 
       {error && <p className="text-sm text-red-500">{error}</p>}
 
-      {tab === "home" && <HomeTab state={state} kid={kid} role={role} marketData={marketData} onMutate={tryMutate} />}
+      {tab === "home" && <HomeTab state={state} kid={kid} marketData={marketData} />}
       {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} onMutate={tryMutate} />}
       {tab === "invest" && <InvestmentSandbox state={state} kid={kid} marketData={marketData} onMutate={tryMutate} />}
       {tab === "bounties" && role === "kid" && <BountyBoard bounties={state.bounties} kid={kid} onMutate={tryMutate} />}
@@ -104,15 +101,11 @@ export function KidDashboard({
 function HomeTab({
   state,
   kid,
-  role,
   marketData,
-  onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
-  role: "parent" | "kid";
   marketData: MarketDataResponse | null;
-  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const total = totalBalanceForKid(state, kid.id);
   const available = availableBalanceForKid(state, kid.id);
@@ -145,7 +138,6 @@ function HomeTab({
           <p className="text-xs opacity-60">
             Plus interest every week — your money earns {formatPercent(state.parentSettings.hysaApr)} a year just by sitting here.
           </p>
-          {role === "parent" && <AllowanceEditor kid={kid} onMutate={onMutate} />}
         </div>
       </section>
 
@@ -256,7 +248,6 @@ function YoungKidHome({
         </section>
       )}
 
-      {role === "parent" && <AllowanceEditor kid={kid} onMutate={onMutate} />}
     </div>
   );
 }
@@ -333,62 +324,6 @@ function YoungSpendForm({
       </form>
       {asked && <p className="text-sm text-green-600">Sent! Dad will say yes or no. 🕐</p>}
     </section>
-  );
-}
-
-function AllowanceEditor({
-  kid,
-  onMutate,
-}: {
-  kid: KidProfile;
-  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [amount, setAmount] = useState(String(kid.weeklyAllowance));
-  const [weekday, setWeekday] = useState(String(kid.paydayWeekday));
-
-  function handleSave(event: React.FormEvent) {
-    event.preventDefault();
-    onMutate((state) => updateKidAllowance(state, kid.id, Number(amount), Number(weekday)));
-    setEditing(false);
-  }
-
-  if (!editing) {
-    return (
-      <button onClick={() => setEditing(true)} className="mt-1 text-xs underline opacity-70">
-        Edit allowance
-      </button>
-    );
-  }
-
-  return (
-    <form onSubmit={handleSave} className="mt-2 flex flex-wrap items-center gap-2">
-      <input
-        value={amount}
-        onChange={(event) => setAmount(event.target.value)}
-        type="number"
-        min={0}
-        step="0.01"
-        className="w-24 rounded-md border border-black/20 px-2 py-1 text-sm dark:border-white/20 dark:bg-transparent"
-      />
-      <select
-        value={weekday}
-        onChange={(event) => setWeekday(event.target.value)}
-        className="rounded-md border border-black/20 px-2 py-1 text-sm dark:border-white/20 dark:bg-transparent"
-      >
-        {WEEKDAYS.map((label, index) => (
-          <option key={label} value={index}>
-            {label}
-          </option>
-        ))}
-      </select>
-      <button type="submit" className="rounded-md bg-black px-2 py-1 text-xs text-white dark:bg-white dark:text-black">
-        Save
-      </button>
-      <button type="button" onClick={() => setEditing(false)} className="text-xs opacity-70">
-        Cancel
-      </button>
-    </form>
   );
 }
 

@@ -9,6 +9,8 @@ export interface AddKidFormValues {
   weeklyAllowance: number;
   paydayWeekday: number;
   avatar: string;
+  email?: string;
+  startingBalance?: number;
 }
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -19,6 +21,8 @@ export function AddKidForm({ onSubmit }: { onSubmit: (values: AddKidFormValues) 
   const [weeklyAllowance, setWeeklyAllowance] = useState("");
   const [paydayWeekday, setPaydayWeekday] = useState("5");
   const [avatar, setAvatar] = useState<string>(KID_AVATARS[0]);
+  const [email, setEmail] = useState("");
+  const [startingBalance, setStartingBalance] = useState("");
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -29,10 +33,14 @@ export function AddKidForm({ onSubmit }: { onSubmit: (values: AddKidFormValues) 
       weeklyAllowance: Number(weeklyAllowance),
       paydayWeekday: Number(paydayWeekday),
       avatar,
+      email: email.trim() || undefined,
+      startingBalance: startingBalance ? Number(startingBalance) : undefined,
     });
     setName("");
     setAge("");
     setWeeklyAllowance("");
+    setEmail("");
+    setStartingBalance("");
   }
 
   return (
@@ -88,6 +96,22 @@ export function AddKidForm({ onSubmit }: { onSubmit: (values: AddKidFormValues) 
             </option>
           ))}
         </select>
+        <input
+          value={startingBalance}
+          onChange={(event) => setStartingBalance(event.target.value)}
+          type="number"
+          min={0}
+          step="0.01"
+          placeholder="Starting balance ($, optional)"
+          className="w-52 rounded-md border border-black/20 px-3 py-2 dark:border-white/20 dark:bg-transparent"
+        />
+        <input
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          type="email"
+          placeholder="Login email (only if they have their own device)"
+          className="min-w-0 flex-1 rounded-md border border-black/20 px-3 py-2 dark:border-white/20 dark:bg-transparent"
+        />
       </div>
       <p className="text-xs opacity-60">Kids age 7 and under get the big, picture-first version of the app.</p>
       <button type="submit" className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">

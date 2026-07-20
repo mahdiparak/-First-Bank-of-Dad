@@ -32,20 +32,33 @@ export function availableBalanceForKid(state: FamilyBankState, kidId: string): n
 
 export function addKid(
   state: FamilyBankState,
-  input: { name: string; age: number; weeklyAllowance: number; paydayWeekday: number; avatar?: string },
+  input: {
+    name: string;
+    age: number;
+    weeklyAllowance: number;
+    paydayWeekday: number;
+    avatar?: string;
+    email?: string;
+    /** Money the kid already has when they join — recorded as an opening deposit so history starts truthful. */
+    startingBalance?: number;
+  },
 ): FamilyBankState {
+  const { startingBalance, ...profile } = input;
+  const now = new Date().toISOString();
   const kid: KidProfile = {
     id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
+    createdAt: now,
     color: KID_COLORS[state.kids.length % KID_COLORS.length],
-    ...input,
+    ...profile,
   };
-  return touch({
+  const withKid = touch({
     ...state,
     kids: [...state.kids, kid],
     taxPots: [...state.taxPots, { kidId: kid.id, balance: 0, rate: state.parentSettings.taxRate }],
     streaks: [...state.streaks, { kidId: kid.id, weeksWithoutWithdrawal: 0 }],
   });
+  if (!startingBalance || startingBalance <= 0) return withKid;
+  return recordTransaction(withKid, kid.id, startingBalance, "🏦", "manual-deposit", "Starting balance", now);
 }
 
 export function recordTransaction(

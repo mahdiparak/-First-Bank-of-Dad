@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AddKidForm, type AddKidFormValues } from "@/components/add-kid-form";
+import { type AddKidFormValues } from "@/components/add-kid-form";
 import { ApprovalQueue } from "@/components/approval-queue";
 import { CelebrationOverlay } from "@/components/celebration-overlay";
 import { InstallBanner } from "@/components/install-banner";
@@ -547,10 +547,8 @@ export default function Home() {
                   </button>
                 </>
               ) : (
-                <p className="text-sm opacity-70">Add a kid below to get started.</p>
+                <p className="text-sm opacity-70">No kids yet — add one in the 👤 Profile tab.</p>
               )}
-
-              <AddKidForm onSubmit={handleAddKid} />
             </>
           )}
 
@@ -560,7 +558,9 @@ export default function Home() {
 
           {parentTab === "talk" && <MoneyTalk state={state} />}
 
-          {parentTab === "profile" && <ProfileSettingsPanel state={state} onMutate={handleMutate} />}
+          {parentTab === "profile" && (
+            <ProfileSettingsPanel state={state} onMutate={handleMutate} onAddKid={handleAddKid} />
+          )}
 
           {parentTab === "family" && <ParentSettingsPanel state={state} onMutate={handleMutate} />}
 
