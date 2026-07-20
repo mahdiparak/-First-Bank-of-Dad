@@ -1,19 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { updateKidProfile, updateParentProfile } from "@/lib/mutations";
 import { kidAvatar, parentAvatar, type FamilyBankState } from "@/lib/schema";
 import { ParentLoginPrompt } from "./role-gate";
 
-const inputClass =
-  "min-w-0 flex-1 rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
-
+/**
+ * The top-right identity chip. Deliberately identity-only — who is using this device, and (from
+ * Kid View) the PIN-gated switch back to Parent. All *editing* of people (names, emails, PINs)
+ * lives in ⚙️ Settings → 👤 Profile so there's exactly one place to manage the family.
+ */
 export function ProfilePanel({
   state,
   role,
   deviceParentId,
   deviceKidId,
-  onMutate,
   onSetDeviceParentId,
   onSwitchToParent,
 }: {
@@ -21,7 +21,6 @@ export function ProfilePanel({
   role: "parent" | "kid";
   deviceParentId: string | null;
   deviceKidId: string | null;
-  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
   onSetDeviceParentId: (parentId: string) => void;
   onSwitchToParent: (parentId?: string) => void;
 }) {
@@ -41,7 +40,8 @@ export function ProfilePanel({
     onSwitchToParent(parentId);
   }
 
-  const buttonGlyph = role === "parent" ? (currentParent ? parentAvatar(currentParent) : "👤") : currentKid ? kidAvatar(currentKid) : "👤";
+  const buttonGlyph =
+    role === "parent" ? (currentParent ? parentAvatar(currentParent) : "👤") : currentKid ? kidAvatar(currentKid) : "👤";
 
   return (
     <span className="relative inline-block align-middle">
@@ -65,159 +65,52 @@ export function ProfilePanel({
           </div>
 
           {role === "parent" ? (
-            <ParentProfileSection
-              state={state}
-              currentParent={currentParent ?? null}
-              onSetDeviceParentId={onSetDeviceParentId}
-              onMutate={onMutate}
-            />
-          ) : (
-            <>
-              {currentKid && <KidEmailField kidId={currentKid.id} email={currentKid.email} onMutate={onMutate} />}
-
-              <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
-                {switchingToParent ? (
-                  <ParentLoginPrompt state={state} onSuccess={handleSwitchSuccess} onCancel={() => setSwitchingToParent(false)} />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setSwitchingToParent(true)}
-                    className="w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+            <div className="space-y-3">
+              {state.parentProfiles.length > 0 ? (
+                <label className="flex flex-col gap-1 text-xs opacity-70">
+                  Who&apos;s using this device?
+                  <select
+                    value={currentParent?.id ?? ""}
+                    onChange={(event) => onSetDeviceParentId(event.target.value)}
+                    className="rounded-md border border-black/20 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
                   >
-                    Switch to Parent
-                  </button>
-                )}
-              </div>
-            </>
+                    <option value="">Not set</option>
+                    {state.parentProfiles.map((parent) => (
+                      <option key={parent.id} value={parent.id}>
+                        {parentAvatar(parent)} {parent.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <p className="text-xs opacity-60">No parents named yet.</p>
+              )}
+              <p className="text-xs opacity-60">
+                Edit names, emails, and PINs in ⚙️ Settings → 👤 Profile.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {currentKid && (
+                <p className="text-xs opacity-60">
+                  Signed in as {kidAvatar(currentKid)} {currentKid.name}.
+                </p>
+              )}
+              {switchingToParent ? (
+                <ParentLoginPrompt state={state} onSuccess={handleSwitchSuccess} onCancel={() => setSwitchingToParent(false)} />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setSwitchingToParent(true)}
+                  className="w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+                >
+                  Switch to Parent
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
     </span>
-  );
-}
-
-function ParentProfileSection({
-  state,
-  currentParent,
-  onSetDeviceParentId,
-  onMutate,
-}: {
-  state: FamilyBankState;
-  currentParent: FamilyBankState["parentProfiles"][number] | null;
-  onSetDeviceParentId: (parentId: string) => void;
-  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
-}) {
-  return (
-    <div className="space-y-3">
-      {state.parentProfiles.length > 0 && (
-        <label className="flex flex-col gap-1 text-xs opacity-70">
-          Who&apos;s using this device?
-          <select
-            value={currentParent?.id ?? ""}
-            onChange={(event) => onSetDeviceParentId(event.target.value)}
-            className="rounded-md border border-black/20 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
-          >
-            <option value="">Not set</option>
-            {state.parentProfiles.map((parent) => (
-              <option key={parent.id} value={parent.id}>
-                {parentAvatar(parent)} {parent.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-
-      {currentParent ? (
-        <ParentEmailField parentId={currentParent.id} email={currentParent.email} onMutate={onMutate} />
-      ) : (
-        <p className="text-xs opacity-60">Pick who you are above to set your email.</p>
-      )}
-    </div>
-  );
-}
-
-function ParentEmailField({
-  parentId,
-  email,
-  onMutate,
-}: {
-  parentId: string;
-  email?: string;
-  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
-}) {
-  const [value, setValue] = useState(email ?? "");
-  const [saved, setSaved] = useState(false);
-
-  function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    onMutate((s) => updateParentProfile(s, parentId, { email: value.trim() }));
-    setSaved(true);
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-1">
-      <label className="flex flex-col gap-1 text-xs opacity-70">
-        Email (matches your login so this device opens straight to you)
-        <div className="flex gap-2">
-          <input
-            value={value}
-            onChange={(event) => {
-              setValue(event.target.value);
-              setSaved(false);
-            }}
-            type="email"
-            placeholder="you@example.com"
-            className={inputClass}
-          />
-          <button type="submit" className="rounded-md bg-black px-3 py-2 text-xs text-white dark:bg-white dark:text-black">
-            Save
-          </button>
-        </div>
-      </label>
-      {saved && <p className="text-xs opacity-60">Saved.</p>}
-    </form>
-  );
-}
-
-function KidEmailField({
-  kidId,
-  email,
-  onMutate,
-}: {
-  kidId: string;
-  email?: string;
-  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
-}) {
-  const [value, setValue] = useState(email ?? "");
-  const [saved, setSaved] = useState(false);
-
-  function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    onMutate((s) => updateKidProfile(s, kidId, { email: value.trim() }));
-    setSaved(true);
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-1">
-      <label className="flex flex-col gap-1 text-xs opacity-70">
-        Your email (only if you have your own device/login)
-        <div className="flex gap-2">
-          <input
-            value={value}
-            onChange={(event) => {
-              setValue(event.target.value);
-              setSaved(false);
-            }}
-            type="email"
-            placeholder="you@example.com"
-            className={inputClass}
-          />
-          <button type="submit" className="rounded-md bg-black px-3 py-2 text-xs text-white dark:bg-white dark:text-black">
-            Save
-          </button>
-        </div>
-      </label>
-      {saved && <p className="text-xs opacity-60">Saved.</p>}
-    </form>
   );
 }

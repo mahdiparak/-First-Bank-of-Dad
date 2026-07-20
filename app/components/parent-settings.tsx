@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { payTaxRefund, setDadMatchMilestones, updateParentSettings } from "@/lib/mutations";
+import { setDadMatchMilestones, updateParentSettings } from "@/lib/mutations";
 import type { FamilyBankState } from "@/lib/schema";
 import { InfoTooltip } from "./info-tooltip";
 
@@ -22,16 +22,6 @@ export function ParentSettingsPanel({
   const [taxRate, setTaxRate] = useState(String(toPercent(settings.taxRate)));
   const [milestoneWeeks, setMilestoneWeeks] = useState("");
   const [milestoneBonus, setMilestoneBonus] = useState("");
-  const [taxError, setTaxError] = useState<string | null>(null);
-
-  function handlePayTaxRefund(kidId: string) {
-    try {
-      setTaxError(null);
-      onMutate((s) => payTaxRefund(s, kidId));
-    } catch (error) {
-      setTaxError(error instanceof Error ? error.message : "Something went wrong.");
-    }
-  }
 
   function handleSaveRates(event: React.FormEvent) {
     event.preventDefault();
@@ -83,8 +73,8 @@ export function ParentSettingsPanel({
             </p>
             <p>
               <strong>Family Tax %:</strong> how much of each allowance payment is withheld into
-              the kid&apos;s Tax Pot below, paid back later as a &quot;refund&quot; — a hands-on
-              lesson in how taxes work.
+              the kid&apos;s Tax Pot (in the 🏦 Money tab), paid back later as a &quot;refund&quot;
+              — a hands-on lesson in how taxes work.
             </p>
           </InfoTooltip>
         </div>
@@ -155,47 +145,6 @@ export function ParentSettingsPanel({
           </button>
         </form>
       </div>
-
-      <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
-        <p className="flex items-center text-sm opacity-70">
-          Tax pots
-          <InfoTooltip label="How do Tax pots work?">
-            <p>
-              Every allowance payment automatically withholds the Family Tax % set above into this
-              pot — just like real income tax withholding.
-            </p>
-            <p>
-              Tap &quot;Pay Tax Refund&quot; whenever you want to hand the withheld amount back to
-              a kid, mimicking a real tax refund. It&apos;s a hands-on way to show where
-              withholding goes and that it does eventually come back.
-            </p>
-          </InfoTooltip>
-        </p>
-        <p className="text-xs opacity-60">
-          The Family Tax withheld from each allowance payment, ready to pay out as a reward.
-        </p>
-        {taxError && <p className="text-sm text-red-500">{taxError}</p>}
-        {state.kids.length === 0 && <p className="text-xs opacity-60">No kids yet.</p>}
-        {state.kids.map((kid) => {
-          const pot = state.taxPots.find((candidate) => candidate.kidId === kid.id);
-          const balance = pot?.balance ?? 0;
-          return (
-            <div key={kid.id} className="flex items-center justify-between text-sm">
-              <span>
-                {kid.name} — {formatCurrency(balance)}
-              </span>
-              <button
-                onClick={() => handlePayTaxRefund(kid.id)}
-                disabled={balance <= 0}
-                className="rounded-md border border-black/20 px-2 py-1 text-xs disabled:opacity-40 dark:border-white/20"
-              >
-                Pay Tax Refund
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
     </section>
   );
 }

@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { approveBounty, approveWithdrawal, createBounty, deleteBounty, denyBounty, denyWithdrawal } from "@/lib/mutations";
+import { approveBounty, approveWithdrawal, denyBounty, denyWithdrawal } from "@/lib/mutations";
 import type { FamilyBankState } from "@/lib/schema";
 
-const inputClass =
-  "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
-
+/** A pure review queue: everything here is a kid-initiated request waiting for a yes/no. Posting new bounties lives in the Money tab. */
 export function ApprovalQueue({
   state,
   onMutate,
@@ -15,8 +13,6 @@ export function ApprovalQueue({
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [bountyTitle, setBountyTitle] = useState("");
-  const [bountyReward, setBountyReward] = useState("");
 
   function tryMutate(mutator: (state: FamilyBankState) => FamilyBankState) {
     try {
@@ -31,17 +27,8 @@ export function ApprovalQueue({
     return state.kids.find((kid) => kid.id === kidId)?.name ?? "Unknown";
   }
 
-  function handleCreateBounty(event: React.FormEvent) {
-    event.preventDefault();
-    if (!bountyTitle.trim() || !bountyReward) return;
-    tryMutate((s) => createBounty(s, bountyTitle.trim(), Number(bountyReward)));
-    setBountyTitle("");
-    setBountyReward("");
-  }
-
   const pendingWithdrawals = state.withdrawalRequests.filter((request) => request.status === "pending");
   const pendingBounties = state.bounties.filter((bounty) => bounty.status === "pending-approval");
-  const openBounties = state.bounties.filter((bounty) => bounty.status === "open");
 
   return (
     <section className="space-y-5 rounded-xl border border-black/10 p-4 dark:border-white/10">
@@ -102,41 +89,6 @@ export function ApprovalQueue({
         ))}
       </div>
 
-      <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
-        <p className="text-sm opacity-70">Bounty Board — open gigs</p>
-        {openBounties.length === 0 && <p className="text-xs opacity-60">No open bounties.</p>}
-        {openBounties.map((bounty) => (
-          <div key={bounty.id} className="flex items-center justify-between text-sm">
-            <span>{bounty.title}</span>
-            <div className="flex items-center gap-3">
-              <span className="opacity-70">{formatCurrency(bounty.reward)}</span>
-              <button onClick={() => tryMutate((s) => deleteBounty(s, bounty.id))} className="text-xs text-red-500">
-                Remove
-              </button>
-            </div>
-          </div>
-        ))}
-        <form onSubmit={handleCreateBounty} className="flex flex-wrap gap-2 pt-1">
-          <input
-            value={bountyTitle}
-            onChange={(event) => setBountyTitle(event.target.value)}
-            placeholder="Chore / task"
-            className={`${inputClass} flex-1`}
-          />
-          <input
-            value={bountyReward}
-            onChange={(event) => setBountyReward(event.target.value)}
-            type="number"
-            min={0.01}
-            step="0.01"
-            placeholder="Reward ($)"
-            className={`${inputClass} w-28`}
-          />
-          <button type="submit" className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">
-            Post bounty
-          </button>
-        </form>
-      </div>
     </section>
   );
 }

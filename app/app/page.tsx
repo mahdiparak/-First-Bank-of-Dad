@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type AddKidFormValues } from "@/components/add-kid-form";
 import { ApprovalQueue } from "@/components/approval-queue";
+import { BountyManager } from "@/components/bounty-manager";
 import { CelebrationOverlay } from "@/components/celebration-overlay";
 import { InstallBanner } from "@/components/install-banner";
 import { KidDashboard } from "@/components/kid-dashboard";
@@ -14,6 +15,7 @@ import { ProfileSettingsPanel } from "@/components/profile-settings";
 import { ReconciliationPanel } from "@/components/reconciliation-panel";
 import { RoleChooser } from "@/components/role-gate";
 import { SyncSettings } from "@/components/sync-settings";
+import { TaxPots } from "@/components/tax-pots";
 import { runScheduledEngines } from "@/lib/allowance";
 import { resolveRoleFromAccessIdentity } from "@/lib/access-identity";
 import { diffCelebrations, type CelebrationEvent } from "@/lib/celebrations";
@@ -415,7 +417,6 @@ export default function Home() {
                 role="kid"
                 deviceParentId={deviceParentId}
                 deviceKidId={deviceKidId}
-                onMutate={handleMutate}
                 onSetDeviceParentId={handleSetDeviceParentId}
                 onSwitchToParent={handleChooseParentRole}
               />
@@ -465,7 +466,6 @@ export default function Home() {
                 role="parent"
                 deviceParentId={deviceParentId}
                 deviceKidId={deviceKidId}
-                onMutate={handleMutate}
                 onSetDeviceParentId={handleSetDeviceParentId}
                 onSwitchToParent={handleChooseParentRole}
               />
@@ -560,7 +560,13 @@ export default function Home() {
 
           {parentTab === "approvals" && <ApprovalQueue state={state} onMutate={handleMutate} />}
 
-          {parentTab === "money" && <ReconciliationPanel state={state} onMutate={handleMutate} />}
+          {parentTab === "money" && (
+            <>
+              <ReconciliationPanel state={state} onMutate={handleMutate} />
+              <TaxPots state={state} onMutate={handleMutate} />
+              <BountyManager state={state} onMutate={handleMutate} />
+            </>
+          )}
 
           {parentTab === "talk" && <MoneyTalk state={state} />}
 
