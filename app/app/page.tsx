@@ -46,7 +46,8 @@ import { SyncClient, type SyncMutation, type SyncStatus } from "@/lib/sync";
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "";
 
 type Phase = "loading" | "enter-phrase" | "ready";
-type ParentTab = "kids" | "approvals" | "money" | "talk" | "profile" | "family" | "app";
+type ParentTab = "kids" | "approvals" | "money" | "talk" | "settings";
+type SettingsSection = "profile" | "family" | "app";
 
 function primeState(loaded: FamilyBankState | null): FamilyBankState | null {
   if (!loaded) return null;
@@ -97,6 +98,7 @@ export default function Home() {
   const [state, setState] = useState<FamilyBankState | null>(null);
   const [selectedKidId, setSelectedKidId] = useState<string | null>(null);
   const [parentTab, setParentTab] = useState<ParentTab>("kids");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("profile");
   const [deviceRole, setDeviceRole] = useState<DeviceRole | null>(null);
   const [deviceKidId, setDeviceKidId] = useState<string | null>(null);
   const [deviceParentId, setDeviceParentId] = useState<string | null>(null);
@@ -435,9 +437,13 @@ export default function Home() {
     { id: "approvals", label: "✅ Approvals" },
     { id: "money", label: "🏦 Money" },
     { id: "talk", label: "💬 Money Talk" },
+    { id: "settings", label: "⚙️ Settings" },
+  ];
+
+  const settingsSections: { id: SettingsSection; label: string }[] = [
     { id: "profile", label: "👤 Profile" },
-    { id: "family", label: "📈 Family Settings" },
-    { id: "app", label: "🛠️ App Settings" },
+    { id: "family", label: "📈 Family" },
+    { id: "app", label: "🛠️ App" },
   ];
 
   const pendingCount = state
@@ -547,7 +553,7 @@ export default function Home() {
                   </button>
                 </>
               ) : (
-                <p className="text-sm opacity-70">No kids yet — add one in the 👤 Profile tab.</p>
+                <p className="text-sm opacity-70">No kids yet — add one under ⚙️ Settings → 👤 Profile.</p>
               )}
             </>
           )}
@@ -558,35 +564,55 @@ export default function Home() {
 
           {parentTab === "talk" && <MoneyTalk state={state} />}
 
-          {parentTab === "profile" && (
-            <ProfileSettingsPanel state={state} onMutate={handleMutate} onAddKid={handleAddKid} />
-          )}
-
-          {parentTab === "family" && <ParentSettingsPanel state={state} onMutate={handleMutate} />}
-
-          {parentTab === "app" && (
+          {parentTab === "settings" && (
             <>
-              <SyncSettings onSave={handleChangeRoomId} />
-              <MarketDataSettings marketData={marketData} onMarketDataRefreshed={setMarketData} />
-              <section className="flex flex-wrap items-center gap-3">
-                <button
-                  onClick={() => exportStateToFile(state)}
-                  className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
-                >
-                  Export backup JSON
-                </button>
-                <label className="cursor-pointer rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20">
-                  Import backup JSON
-                  <input type="file" accept="application/json" className="hidden" onChange={handleImport} />
-                </label>
-                <button
-                  onClick={() => void broadcastSnapshot(state)}
-                  className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
-                >
-                  Sync now
-                </button>
-              </section>
-              {importError && <p className="text-sm text-red-500">{importError}</p>}
+              <nav className="flex flex-wrap gap-2">
+                {settingsSections.map((entry) => (
+                  <button
+                    key={entry.id}
+                    onClick={() => setSettingsSection(entry.id)}
+                    className={`rounded-full px-3 py-1 text-xs ${
+                      settingsSection === entry.id
+                        ? "bg-black text-white dark:bg-white dark:text-black"
+                        : "border border-black/20 dark:border-white/20"
+                    }`}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </nav>
+
+              {settingsSection === "profile" && (
+                <ProfileSettingsPanel state={state} onMutate={handleMutate} onAddKid={handleAddKid} />
+              )}
+
+              {settingsSection === "family" && <ParentSettingsPanel state={state} onMutate={handleMutate} />}
+
+              {settingsSection === "app" && (
+                <>
+                  <SyncSettings onSave={handleChangeRoomId} />
+                  <MarketDataSettings marketData={marketData} onMarketDataRefreshed={setMarketData} />
+                  <section className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => exportStateToFile(state)}
+                      className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+                    >
+                      Export backup JSON
+                    </button>
+                    <label className="cursor-pointer rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20">
+                      Import backup JSON
+                      <input type="file" accept="application/json" className="hidden" onChange={handleImport} />
+                    </label>
+                    <button
+                      onClick={() => void broadcastSnapshot(state)}
+                      className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
+                    >
+                      Sync now
+                    </button>
+                  </section>
+                  {importError && <p className="text-sm text-red-500">{importError}</p>}
+                </>
+              )}
             </>
           )}
         </>

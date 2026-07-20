@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { hashPin } from "@/lib/crypto";
-import { payTaxRefund, setDadMatchMilestones, setParentPinHash, updateParentSettings } from "@/lib/mutations";
+import { payTaxRefund, setDadMatchMilestones, updateParentSettings } from "@/lib/mutations";
 import type { FamilyBankState } from "@/lib/schema";
 import { InfoTooltip } from "./info-tooltip";
 
@@ -23,8 +22,6 @@ export function ParentSettingsPanel({
   const [taxRate, setTaxRate] = useState(String(toPercent(settings.taxRate)));
   const [milestoneWeeks, setMilestoneWeeks] = useState("");
   const [milestoneBonus, setMilestoneBonus] = useState("");
-  const [pin, setPin] = useState("");
-  const [pinMessage, setPinMessage] = useState<string | null>(null);
   const [taxError, setTaxError] = useState<string | null>(null);
 
   function handlePayTaxRefund(kidId: string) {
@@ -67,23 +64,6 @@ export function ParentSettingsPanel({
         s.parentSettings.dadMatchMilestones.filter((milestone) => milestone.weeks !== weeks),
       ),
     );
-  }
-
-  async function handleSetPin(event: React.FormEvent) {
-    event.preventDefault();
-    if (pin.trim().length < 4) {
-      setPinMessage("Use at least 4 digits.");
-      return;
-    }
-    const hash = await hashPin(pin);
-    onMutate((s) => setParentPinHash(s, hash));
-    setPin("");
-    setPinMessage("PIN saved.");
-  }
-
-  function handleRemovePin() {
-    onMutate((s) => setParentPinHash(s, null));
-    setPinMessage("Shared PIN removed.");
   }
 
   return (
@@ -216,37 +196,6 @@ export function ParentSettingsPanel({
         })}
       </div>
 
-      <form onSubmit={handleSetPin} className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
-        <p className="text-sm opacity-70">Shared backup PIN {settings.parentPinHash ? "(set)" : "(not set)"}</p>
-        <p className="text-xs opacity-60">
-          Used only if a parent hasn&apos;t set their own personal PIN yet (set those in Profile
-          Setup). It&apos;s a speed bump for curious kids, not encryption — anyone with the Family
-          Phrase already has the data.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <input
-            value={pin}
-            onChange={(e) => setPin(e.target.value)}
-            type="password"
-            inputMode="numeric"
-            placeholder="New PIN"
-            className={inputClass}
-          />
-          <button type="submit" className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20">
-            {settings.parentPinHash ? "Change PIN" : "Set PIN"}
-          </button>
-          {settings.parentPinHash && (
-            <button
-              type="button"
-              onClick={handleRemovePin}
-              className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
-            >
-              Remove PIN
-            </button>
-          )}
-        </div>
-        {pinMessage && <p className="text-xs opacity-60">{pinMessage}</p>}
-      </form>
     </section>
   );
 }

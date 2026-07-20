@@ -6,6 +6,7 @@ import {
   addParentProfile,
   removeKid,
   removeParentProfile,
+  setParentPinHash,
   setParentProfilePin,
   updateKidAllowance,
   updateKidProfile,
@@ -97,6 +98,7 @@ export function ProfileSettingsPanel({
             </button>
           </div>
         </form>
+        <SharedPinEditor state={state} onMutate={onMutate} />
       </div>
 
       <div className="space-y-3 border-t border-black/10 pt-3 dark:border-white/10">
@@ -113,6 +115,68 @@ export function ProfileSettingsPanel({
         <AddKidForm onSubmit={onAddKid} />
       </div>
     </section>
+  );
+}
+
+/**
+ * The old family-wide PIN, kept as a fallback for parents without a personal PIN. Lives here so
+ * every PIN control sits in one place, next to the parents it applies to.
+ */
+function SharedPinEditor({
+  state,
+  onMutate,
+}: {
+  state: FamilyBankState;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const hasPin = Boolean(state.parentSettings.parentPinHash);
+
+  async function handleSetPin(event: React.FormEvent) {
+    event.preventDefault();
+    if (pin.trim().length < 4) {
+      setMessage("Use at least 4 digits.");
+      return;
+    }
+    const hash = await hashPin(pin);
+    onMutate((s) => setParentPinHash(s, hash));
+    setPin("");
+    setMessage("Shared PIN saved.");
+  }
+
+  function handleRemovePin() {
+    onMutate((s) => setParentPinHash(s, null));
+    setMessage("Shared PIN removed.");
+  }
+
+  return (
+    <form onSubmit={handleSetPin} className="space-y-2 rounded-lg border border-black/10 p-3 dark:border-white/10">
+      <p className="text-xs opacity-70">Shared backup PIN {hasPin ? "(set)" : "(not set)"}</p>
+      <p className="text-xs opacity-60">
+        Works for any parent who hasn&apos;t set their own PIN above. It&apos;s a speed bump for
+        curious kids, not encryption.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <input
+          value={pin}
+          onChange={(e) => setPin(e.target.value)}
+          type="password"
+          inputMode="numeric"
+          placeholder="New PIN"
+          className={`${inputClass} w-28`}
+        />
+        <button type="submit" className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20">
+          {hasPin ? "Change PIN" : "Set PIN"}
+        </button>
+        {hasPin && (
+          <button type="button" onClick={handleRemovePin} className="text-xs opacity-70 underline">
+            Remove PIN
+          </button>
+        )}
+      </div>
+      {message && <p className="text-xs opacity-60">{message}</p>}
+    </form>
   );
 }
 
