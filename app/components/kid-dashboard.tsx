@@ -18,16 +18,16 @@ import {
   SPENDING_CATEGORIES,
   YOUNG_KID_MAX_AGE,
   type AuditActor,
-  type Bounty,
   type FamilyBankState,
   type KidProfile,
 } from "@/lib/schema";
 import { BadgeWall } from "./badge-wall";
 import { MoneyTimeline } from "./money-timeline";
 import { InvestmentSandbox } from "./investment-sandbox";
+import { QuestBoard, QuestCard } from "./quest-board";
 import type { MarketDataResponse } from "@/lib/market-data";
 
-type KidTab = "home" | "goals" | "invest" | "bounties" | "ledger";
+type KidTab = "home" | "goals" | "invest" | "quests" | "ledger";
 
 export function KidDashboard({
   state,
@@ -69,7 +69,7 @@ export function KidDashboard({
     { id: "home", label: "🏠 Home" },
     { id: "goals", label: "🎯 Goals" },
     { id: "invest", label: "📈 Invest" },
-    ...(role === "kid" ? [{ id: "bounties" as KidTab, label: "💪 Bounties" }] : []),
+    ...(role === "kid" ? [{ id: "quests" as KidTab, label: "🗺️ Quests" }] : []),
     { id: "ledger", label: "📒 Ledger" },
   ];
 
@@ -98,8 +98,8 @@ export function KidDashboard({
       {tab === "invest" && (
         <InvestmentSandbox state={state} kid={kid} marketData={marketData} actor={actor} onMutate={tryMutate} />
       )}
-      {tab === "bounties" && role === "kid" && (
-        <BountyBoard bounties={state.bounties} kid={kid} actor={actor} onMutate={tryMutate} />
+      {tab === "quests" && role === "kid" && (
+        <QuestBoard bounties={state.bounties} kid={kid} actor={actor} onMutate={tryMutate} />
       )}
       {tab === "ledger" && <Ledger state={state} kid={kid} role={role} onMutate={tryMutate} />}
     </div>
@@ -224,17 +224,15 @@ function YoungKidHome({
       <GoalGetter state={state} kid={kid} role={role} actor={actor} onMutate={onMutate} young />
 
       {openBounties.length > 0 && role === "kid" && (
-        <section className="space-y-3 rounded-3xl border border-black/10 p-5 dark:border-white/10">
-          <p className="text-lg font-semibold">💪 Jobs for extra money</p>
+        <section className="space-y-3 rounded-3xl border-2 border-dashed border-amber-500/40 bg-amber-500/5 p-5">
+          <p className="text-lg font-semibold">🗺️ Quest Board — earn extra money!</p>
           {openBounties.map((bounty) => (
-            <button
+            <QuestCard
               key={bounty.id}
-              onClick={() => onMutate((s) => claimBounty(s, bounty.id, kid.id, actor))}
-              className="flex w-full items-center justify-between rounded-2xl border-2 border-black/15 p-4 text-left text-base dark:border-white/20"
-            >
-              <span>{bounty.title}</span>
-              <span className="font-bold text-green-600">{formatCurrency(bounty.reward)}</span>
-            </button>
+              bounty={bounty}
+              onClaim={() => onMutate((s) => claimBounty(s, bounty.id, kid.id, actor))}
+              young
+            />
           ))}
         </section>
       )}
@@ -489,69 +487,6 @@ function DeleteGoalButton({
       Delete
     </button>
   );
-}
-
-function BountyBoard({
-  bounties,
-  kid,
-  actor,
-  onMutate,
-}: {
-  bounties: Bounty[];
-  kid: KidProfile;
-  actor: AuditActor;
-  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
-}) {
-  const open = bounties.filter((bounty) => bounty.status === "open");
-  const mine = bounties.filter((bounty) => bounty.claimedByKidId === kid.id && bounty.status !== "open");
-
-  return (
-    <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
-      <h2 className="font-semibold">💪 Bounty Board</h2>
-
-      {open.length === 0 && <p className="text-sm opacity-70">No open bounties right now.</p>}
-      <div className="space-y-2">
-        {open.map((bounty) => (
-          <div key={bounty.id} className="flex items-center justify-between text-sm">
-            <span>{bounty.title}</span>
-            <div className="flex items-center gap-2">
-              <span className="text-green-600">{formatCurrency(bounty.reward)}</span>
-              <button
-                onClick={() => onMutate((state) => claimBounty(state, bounty.id, kid.id, actor))}
-                className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
-              >
-                Claim
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {mine.length > 0 && (
-        <div className="space-y-1 border-t border-black/10 pt-2 dark:border-white/10">
-          {mine.map((bounty) => (
-            <div key={bounty.id} className="flex items-center justify-between text-xs opacity-70">
-              <span>{bounty.title}</span>
-              <span>{bountyStatusLabel(bounty.status)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function bountyStatusLabel(status: Bounty["status"]): string {
-  switch (status) {
-    case "pending-approval":
-      return "Waiting for Dad";
-    case "approved":
-      return "Paid! 🎉";
-    case "denied":
-      return "Not this time";
-    default:
-      return status;
-  }
 }
 
 function Ledger({

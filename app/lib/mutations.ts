@@ -448,12 +448,12 @@ export function setParentPinHash(state: FamilyBankState, pinHash: string | null)
   return touch({ ...state, parentSettings });
 }
 
-/** Parent-side: posts a new gig on the Bounty Board. */
-export function createBounty(state: FamilyBankState, title: string, reward: number): FamilyBankState {
+/** Parent-side: posts a new gig on the Quest Board. */
+export function createBounty(state: FamilyBankState, title: string, reward: number, icon?: string): FamilyBankState {
   if (reward <= 0) throw new Error("Reward must be positive.");
   return touch({
     ...state,
-    bounties: [...state.bounties, { id: crypto.randomUUID(), title, reward, status: "open" }],
+    bounties: [...state.bounties, { id: crypto.randomUUID(), title, reward, status: "open", icon }],
   });
 }
 
