@@ -8,6 +8,7 @@ import {
   claimBounty,
   createGoal,
   deleteGoal,
+  removeTransaction,
   requestGoalSpend,
   requestWithdrawal,
   totalBalanceForKid,
@@ -93,7 +94,7 @@ export function KidDashboard({
       {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} onMutate={tryMutate} />}
       {tab === "invest" && <InvestmentSandbox state={state} kid={kid} marketData={marketData} onMutate={tryMutate} />}
       {tab === "bounties" && role === "kid" && <BountyBoard bounties={state.bounties} kid={kid} onMutate={tryMutate} />}
-      {tab === "ledger" && <Ledger state={state} kid={kid} onMutate={tryMutate} />}
+      {tab === "ledger" && <Ledger state={state} kid={kid} role={role} onMutate={tryMutate} />}
     </div>
   );
 }
@@ -239,9 +240,20 @@ function YoungKidHome({
               <span>
                 {transaction.category} {transaction.memo ?? ""}
               </span>
-              <span className={transaction.amount < 0 ? "text-red-500" : "text-green-600"}>
-                {transaction.amount < 0 ? "-" : "+"}
-                {formatCurrency(Math.abs(transaction.amount))}
+              <span className="flex items-center gap-2">
+                <span className={transaction.amount < 0 ? "text-red-500" : "text-green-600"}>
+                  {transaction.amount < 0 ? "-" : "+"}
+                  {formatCurrency(Math.abs(transaction.amount))}
+                </span>
+                {role === "parent" && (
+                  <button
+                    onClick={() => onMutate((s) => removeTransaction(s, transaction.id))}
+                    aria-label="Delete this transaction"
+                    className="text-sm opacity-50"
+                  >
+                    ✕
+                  </button>
+                )}
               </span>
             </div>
           ))}
@@ -532,10 +544,12 @@ function bountyStatusLabel(status: Bounty["status"]): string {
 function Ledger({
   state,
   kid,
+  role,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
+  role: "parent" | "kid";
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [amount, setAmount] = useState("");
@@ -615,9 +629,20 @@ function Ledger({
                 <span>{row.item.category}</span>
                 <span>{row.item.memo ?? sourceLabel(row.item.source)}</span>
               </div>
-              <span className={row.item.amount < 0 ? "text-red-500" : "text-green-600"}>
-                {row.item.amount < 0 ? "-" : "+"}
-                {formatCurrency(Math.abs(row.item.amount))}
+              <span className="flex items-center gap-2">
+                <span className={row.item.amount < 0 ? "text-red-500" : "text-green-600"}>
+                  {row.item.amount < 0 ? "-" : "+"}
+                  {formatCurrency(Math.abs(row.item.amount))}
+                </span>
+                {role === "parent" && (
+                  <button
+                    onClick={() => onMutate((s) => removeTransaction(s, row.item.id))}
+                    aria-label="Delete this transaction"
+                    className="text-xs opacity-50"
+                  >
+                    ✕
+                  </button>
+                )}
               </span>
             </div>
           ) : (
