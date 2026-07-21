@@ -7,6 +7,6 @@
     "set-admin-token": "wrangler secret put ADMIN_TOKEN"
   },
   "devDependencies": {
-    "wrangler": "^3.90.0"
+    "wrangler": "^4.0.0"
   }
 }
