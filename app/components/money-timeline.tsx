@@ -9,12 +9,30 @@ const WIDTH = 640;
 const HEIGHT = 300;
 const MARGIN = { top: 30, right: 16, bottom: 28, left: 46 };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const SIM_STYLES: Record<SimKind, { color: string; emoji: string; label: string }> = {
   withdraw: { color: "#ef4444", emoji: "💸", label: "Take out" },
   add: { color: "#22c55e", emoji: "💰", label: "Add" },
   invest: { color: "#8b5cf6", emoji: "🎢", label: "Invest" },
 };
+
+type RangeId = "15d" | "30d" | "3m" | "6m" | "all";
+const RANGES: { id: RangeId; label: string; days?: number }[] = [
+  { id: "15d", label: "15D", days: 15 },
+  { id: "30d", label: "30D", days: 30 },
+  { id: "3m", label: "3M", days: 90 },
+  { id: "6m", label: "6M", days: 182 },
+  { id: "all", label: "All" },
+];
+
+/** Clips a chronological point series to [from, to], carrying the last prior value forward so a
+ *  zoomed-in window that starts mid-segment still draws a continuous line from its left edge. */
+function clipToWindow(points: TimelinePoint[], from: number, to: number): TimelinePoint[] {
+  const before = points.filter((p) => p.t < from).at(-1);
+  const inWindow = points.filter((p) => p.t >= from && p.t <= to);
+  return before ? [{ t: from, value: before.value }, ...inWindow] : inWindow;
+}
 
 export function MoneyTimeline({
   state,
@@ -29,6 +47,7 @@ export function MoneyTimeline({
   const [simKind, setSimKind] = useState<SimKind>("withdraw");
   const [activeSim, setActiveSim] = useState<{ kind: SimKind; amount: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [range, setRange] = useState<RangeId>("all");
 
   // Average weekly stock return from real market history (fallback distribution offline).
   const investWeeklyRate = useMemo(() => {
@@ -51,9 +70,21 @@ export function MoneyTimeline({
   const balance = timeline.past[timeline.past.length - 1].value;
 
   const allPoints = [...timeline.past, ...timeline.future, ...(timeline.sim ?? [])];
-  const tMin = timeline.past[0].t;
-  const tMax = allPoints[allPoints.length - 1].t;
-  const vMax = Math.max(...allPoints.map((p) => p.value), 1);
+  const fullMin = timeline.past[0].t;
+  const fullMax = allPoints[allPoints.length - 1].t;
+  const selectedRange = RANGES.find((entry) => entry.id === range);
+  // Range tabs are lookback windows onto real history, not the projection — zooming to "15D"
+  // means the last 15 real days, so the domain's right edge pins to today rather than the future.
+  const tMax = selectedRange?.days ? timeline.todayT : fullMax;
+  const tMin = selectedRange?.days ? Math.max(fullMin, timeline.todayT - selectedRange.days * DAY_MS) : fullMin;
+
+  const visiblePast = clipToWindow(timeline.past, tMin, tMax);
+  const visibleFuture = clipToWindow(timeline.future, tMin, tMax);
+  const visibleSim = timeline.sim ? clipToWindow(timeline.sim, tMin, tMax) : undefined;
+  const visibleEvents = timeline.events.filter((event) => event.t >= tMin && event.t <= tMax);
+
+  const visiblePoints = [...visiblePast, ...visibleFuture, ...(visibleSim ?? [])];
+  const vMax = Math.max(...visiblePoints.map((p) => p.value), 1);
 
   const rawStep = vMax / 4;
   const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
@@ -69,13 +100,24 @@ export function MoneyTimeline({
   const yTicks: number[] = [];
   for (let v = 0; v <= yTop + 1e-9; v += step) yTicks.push(v);
 
+  // Short windows get day-spaced ticks with a month+day label; the full history falls back to
+  // 6-month ticks so years of data don't produce an unreadable wall of labels.
+  const rangeDays = (tMax - tMin) / DAY_MS;
   const xTicks: { t: number; label: string }[] = [];
-  const start = new Date(tMin);
-  for (let m = 0; ; m += 6) {
-    const tick = Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + m, 1);
-    if (tick > tMax) break;
-    const d = new Date(tick);
-    xTicks.push({ t: tick, label: `${MONTHS[d.getUTCMonth()]} '${String(d.getUTCFullYear()).slice(2)}` });
+  if (rangeDays <= 200) {
+    const stepDays = rangeDays <= 20 ? 3 : rangeDays <= 45 ? 7 : rangeDays <= 120 ? 14 : 30;
+    for (let t = tMin; t <= tMax; t += stepDays * DAY_MS) {
+      const d = new Date(t);
+      xTicks.push({ t, label: `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}` });
+    }
+  } else {
+    const start = new Date(tMin);
+    for (let m = 0; ; m += 6) {
+      const tick = Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + m, 1);
+      if (tick > tMax) break;
+      const d = new Date(tick);
+      xTicks.push({ t: tick, label: `${MONTHS[d.getUTCMonth()]} '${String(d.getUTCFullYear()).slice(2)}` });
+    }
   }
 
   function handleSimulate(event: React.FormEvent) {
@@ -128,6 +170,21 @@ export function MoneyTimeline({
         Every deposit, chore, spend, and investment lands on this line. Solid: since Jan 2025 (starting near{" "}
         {formatCurrency(timeline.startingBalance)}). Dotted: where you&apos;re headed.
       </p>
+
+      <div className="flex overflow-hidden rounded-md border border-black/20 dark:border-white/20 w-fit">
+        {RANGES.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            onClick={() => setRange(entry.id)}
+            className={`px-2.5 py-1 text-xs ${
+              range === entry.id ? "bg-black text-white dark:bg-white dark:text-black" : ""
+            }`}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
 
       <div className="overflow-x-auto">
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="min-w-[480px] w-full" aria-label="Balance over time">
@@ -182,9 +239,9 @@ export function MoneyTimeline({
             />
           )}
 
-          <path d={path(timeline.past)} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
+          <path d={path(visiblePast)} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
           <path
-            d={path(timeline.future)}
+            d={path(visibleFuture)}
             fill="none"
             stroke={color}
             strokeWidth="2"
@@ -192,8 +249,8 @@ export function MoneyTimeline({
             strokeOpacity="0.8"
           />
 
-          {timeline.sim && simStyle && (
-            <path d={path(timeline.sim)} fill="none" stroke={simStyle.color} strokeWidth="2" strokeDasharray="5 5" />
+          {visibleSim && simStyle && (
+            <path d={path(visibleSim)} fill="none" stroke={simStyle.color} strokeWidth="2" strokeDasharray="5 5" />
           )}
 
           {timeline.simKind === "withdraw" && timeline.recoveryAt && timeline.preWithdrawalLevel !== undefined && (
@@ -201,8 +258,8 @@ export function MoneyTimeline({
           )}
 
           {/* real money events, annotated with their emoji (same-day events stack upward) */}
-          {timeline.events.map((event, i) => {
-            const overlapping = timeline.events.slice(0, i).filter((other) => Math.abs(x(other.t) - x(event.t)) < 10).length;
+          {visibleEvents.map((event, i) => {
+            const overlapping = visibleEvents.slice(0, i).filter((other) => Math.abs(x(other.t) - x(event.t)) < 10).length;
             return (
               <g key={`${event.t}-${i}`}>
                 <circle cx={x(event.t)} cy={y(event.value)} r="2.5" fill={color} />
@@ -215,8 +272,8 @@ export function MoneyTimeline({
           })}
 
           {/* sim start marker */}
-          {timeline.sim && simStyle && (
-            <text x={x(timeline.todayT) + 10} y={y(timeline.sim[0].value) - 8} fontSize="14">
+          {visibleSim && visibleSim.length > 0 && simStyle && (
+            <text x={x(timeline.todayT) + 10} y={y(visibleSim[0].value) - 8} fontSize="14">
               {simStyle.emoji}
             </text>
           )}
