@@ -87,6 +87,14 @@ export function recordTransaction(
   });
 }
 
+/** Parent-side: erases a transaction entirely (e.g. a test entry), rather than offsetting it with a reversal. */
+export function removeTransaction(state: FamilyBankState, transactionId: string): FamilyBankState {
+  return touch({
+    ...state,
+    transactions: state.transactions.filter((transaction) => transaction.id !== transactionId),
+  });
+}
+
 /** Kid-side: asks a parent for money to spend. Nothing leaves the balance until approved. */
 export function requestWithdrawal(
   state: FamilyBankState,
