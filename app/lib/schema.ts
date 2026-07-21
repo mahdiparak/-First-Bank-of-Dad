@@ -99,6 +99,26 @@ export interface Bounty {
   claimedByKidId?: string;
   claimedAt?: string;
   resolvedAt?: string;
+  icon?: string; // emoji
+}
+
+export const QUEST_ICONS = ["🧹", "🧺", "🍽️", "🐕", "🌱", "🚗", "🛏️", "🧽", "🗑️", "📚", "🎨", "📦", "🪟", "⭐"] as const;
+
+export function questIcon(bounty: Bounty): string {
+  return bounty.icon ?? QUEST_ICONS[hashIndex(bounty.id, QUEST_ICONS.length)];
+}
+
+export interface QuestTier {
+  label: string;
+  stars: string;
+  color: string;
+}
+
+/** Turns a reward amount into a game-style difficulty badge — purely a presentation layer over the existing dollar value, no new data. */
+export function questTier(reward: number): QuestTier {
+  if (reward < 3) return { label: "Easy", stars: "⭐", color: "#22c55e" };
+  if (reward < 7) return { label: "Medium", stars: "⭐⭐", color: "#f59e0b" };
+  return { label: "Hard", stars: "⭐⭐⭐", color: "#a855f7" };
 }
 
 export interface DadMatchMilestone {

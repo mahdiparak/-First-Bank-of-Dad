@@ -74,9 +74,9 @@ export function badgesForKid(state: FamilyBankState, kidId: string): Badge[] {
     },
     {
       id: "bounty-hunter",
-      emoji: "💪",
-      title: "Bounty Hunter",
-      description: "Earned extra money from the Bounty Board.",
+      emoji: "🗺️",
+      title: "Quest Hunter",
+      description: "Earned extra money from the Quest Board.",
       earned: mine("bounty"),
     },
     {
