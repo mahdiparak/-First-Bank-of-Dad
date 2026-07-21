@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type AddKidFormValues } from "@/components/add-kid-form";
 import { ApprovalQueue } from "@/components/approval-queue";
+import { AuditTrailPanel } from "@/components/audit-trail";
 import { BountyManager } from "@/components/bounty-manager";
 import { CelebrationOverlay } from "@/components/celebration-overlay";
 import { InstallBanner } from "@/components/install-banner";
@@ -23,7 +24,7 @@ import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
 import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
-import { createEmptyState, kidAvatar, kidColor, normalizeState, type FamilyBankState } from "@/lib/schema";
+import { createEmptyState, kidAvatar, kidColor, normalizeState, type AuditActor, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
   getOrCreateDeviceId,
@@ -48,7 +49,7 @@ import { SyncClient, type SyncMutation, type SyncStatus } from "@/lib/sync";
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "";
 
 type Phase = "loading" | "enter-phrase" | "ready";
-type ParentTab = "kids" | "approvals" | "money" | "talk" | "settings";
+type ParentTab = "kids" | "approvals" | "money" | "talk" | "audit" | "settings";
 type SettingsSection = "profile" | "family" | "app";
 
 function primeState(loaded: FamilyBankState | null): FamilyBankState | null {
@@ -424,7 +425,14 @@ export default function Home() {
           </header>
 
           {kid ? (
-            <KidDashboard state={state} kid={kid} role="kid" marketData={marketData} onMutate={handleMutate} />
+            <KidDashboard
+              state={state}
+              kid={kid}
+              role="kid"
+              marketData={marketData}
+              actor={{ role: "kid", name: kid.name }}
+              onMutate={handleMutate}
+            />
           ) : (
             <p className="text-sm opacity-70">Ask a parent to set this device up.</p>
           )}
@@ -438,6 +446,7 @@ export default function Home() {
     { id: "approvals", label: "✅ Approvals" },
     { id: "money", label: "🏦 Money" },
     { id: "talk", label: "💬 Money Talk" },
+    { id: "audit", label: "🧾 Activity" },
     { id: "settings", label: "⚙️ Settings" },
   ];
 
@@ -451,6 +460,11 @@ export default function Home() {
     ? state.withdrawalRequests.filter((request) => request.status === "pending").length +
       state.bounties.filter((bounty) => bounty.status === "pending-approval").length
     : 0;
+
+  const currentParentName = state
+    ? (state.parentProfiles.find((parent) => parent.id === deviceParentId)?.name ?? "Dad")
+    : "Dad";
+  const parentActor: AuditActor = { role: "parent", name: currentParentName };
 
   return (
     <>
@@ -543,6 +557,7 @@ export default function Home() {
                     kid={selectedKid}
                     role="parent"
                     marketData={marketData}
+                    actor={parentActor}
                     onMutate={handleMutate}
                   />
                   <button
@@ -558,17 +573,19 @@ export default function Home() {
             </>
           )}
 
-          {parentTab === "approvals" && <ApprovalQueue state={state} onMutate={handleMutate} />}
+          {parentTab === "approvals" && <ApprovalQueue state={state} actor={parentActor} onMutate={handleMutate} />}
 
           {parentTab === "money" && (
             <>
-              <ReconciliationPanel state={state} onMutate={handleMutate} />
-              <TaxPots state={state} onMutate={handleMutate} />
+              <ReconciliationPanel state={state} actor={parentActor} onMutate={handleMutate} />
+              <TaxPots state={state} actor={parentActor} onMutate={handleMutate} />
               <BountyManager state={state} onMutate={handleMutate} />
             </>
           )}
 
           {parentTab === "talk" && <MoneyTalk state={state} />}
+
+          {parentTab === "audit" && <AuditTrailPanel state={state} onMutate={handleMutate} />}
 
           {parentTab === "settings" && (
             <>

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { MarketDataResponse } from "@/lib/market-data";
 import { allocateToInvestment, availableBalanceForKid, withdrawFromInvestment } from "@/lib/mutations";
-import { ASSET_CLASSES, type AssetClass, type FamilyBankState, type InvestmentPosition, type KidProfile } from "@/lib/schema";
+import { ASSET_CLASSES, type AssetClass, type AuditActor, type FamilyBankState, type InvestmentPosition, type KidProfile } from "@/lib/schema";
 import { WhatIfSimulator } from "./whatif-simulator";
 
 const ASSET_CLASS_ORDER: AssetClass[] = ["savings", "cd", "stocks", "crypto"];
@@ -12,11 +12,13 @@ export function InvestmentSandbox({
   state,
   kid,
   marketData,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   marketData: MarketDataResponse | null;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +49,7 @@ export function InvestmentSandbox({
           kid={kid}
           available={available}
           positions={positions.filter((position) => position.assetClass === assetClass)}
+          actor={actor}
           onMutate={tryMutate}
         />
       ))}
@@ -62,6 +65,7 @@ function AssetClassCard({
   kid,
   available,
   positions,
+  actor,
   onMutate,
 }: {
   assetClass: AssetClass;
@@ -69,6 +73,7 @@ function AssetClassCard({
   kid: KidProfile;
   available: number;
   positions: InvestmentPosition[];
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [amount, setAmount] = useState("");
@@ -80,7 +85,14 @@ function AssetClassCard({
     event.preventDefault();
     if (!amount) return;
     onMutate((s) =>
-      allocateToInvestment(s, kid.id, assetClass, Number(amount), assetClass === "cd" ? Number(lockWeeks) : undefined),
+      allocateToInvestment(
+        s,
+        kid.id,
+        assetClass,
+        Number(amount),
+        assetClass === "cd" ? Number(lockWeeks) : undefined,
+        actor,
+      ),
     );
     setAmount("");
   }
@@ -104,7 +116,7 @@ function AssetClassCard({
             {position.assetClass === "cd" && position.maturesAt && ` (matures ${new Date(position.maturesAt).toLocaleDateString()})`}
           </span>
           <button
-            onClick={() => onMutate((s) => withdrawFromInvestment(s, position.id))}
+            onClick={() => onMutate((s) => withdrawFromInvestment(s, position.id, actor))}
             className="rounded-md border border-black/20 px-2 py-1 dark:border-white/20"
           >
             Cash out

@@ -17,6 +17,7 @@ import {
   kidColor,
   SPENDING_CATEGORIES,
   YOUNG_KID_MAX_AGE,
+  type AuditActor,
   type Bounty,
   type FamilyBankState,
   type KidProfile,
@@ -33,12 +34,14 @@ export function KidDashboard({
   kid,
   role,
   marketData,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   role: "parent" | "kid";
   marketData: MarketDataResponse | null;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +60,7 @@ export function KidDashboard({
     return (
       <div className="space-y-6">
         {error && <p className="text-sm text-red-500">{error}</p>}
-        <YoungKidHome state={state} kid={kid} role={role} marketData={marketData} onMutate={tryMutate} />
+        <YoungKidHome state={state} kid={kid} role={role} marketData={marketData} actor={actor} onMutate={tryMutate} />
       </div>
     );
   }
@@ -91,9 +94,13 @@ export function KidDashboard({
       {error && <p className="text-sm text-red-500">{error}</p>}
 
       {tab === "home" && <HomeTab state={state} kid={kid} marketData={marketData} />}
-      {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} onMutate={tryMutate} />}
-      {tab === "invest" && <InvestmentSandbox state={state} kid={kid} marketData={marketData} onMutate={tryMutate} />}
-      {tab === "bounties" && role === "kid" && <BountyBoard bounties={state.bounties} kid={kid} onMutate={tryMutate} />}
+      {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} actor={actor} onMutate={tryMutate} />}
+      {tab === "invest" && (
+        <InvestmentSandbox state={state} kid={kid} marketData={marketData} actor={actor} onMutate={tryMutate} />
+      )}
+      {tab === "bounties" && role === "kid" && (
+        <BountyBoard bounties={state.bounties} kid={kid} actor={actor} onMutate={tryMutate} />
+      )}
       {tab === "ledger" && <Ledger state={state} kid={kid} role={role} onMutate={tryMutate} />}
     </div>
   );
@@ -168,12 +175,14 @@ function YoungKidHome({
   kid,
   role,
   marketData,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   role: "parent" | "kid";
   marketData: MarketDataResponse | null;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const total = totalBalanceForKid(state, kid.id);
@@ -212,7 +221,7 @@ function YoungKidHome({
         </p>
       </section>
 
-      <GoalGetter state={state} kid={kid} role={role} onMutate={onMutate} young />
+      <GoalGetter state={state} kid={kid} role={role} actor={actor} onMutate={onMutate} young />
 
       {openBounties.length > 0 && role === "kid" && (
         <section className="space-y-3 rounded-3xl border border-black/10 p-5 dark:border-white/10">
@@ -220,7 +229,7 @@ function YoungKidHome({
           {openBounties.map((bounty) => (
             <button
               key={bounty.id}
-              onClick={() => onMutate((s) => claimBounty(s, bounty.id, kid.id))}
+              onClick={() => onMutate((s) => claimBounty(s, bounty.id, kid.id, actor))}
               className="flex w-full items-center justify-between rounded-2xl border-2 border-black/15 p-4 text-left text-base dark:border-white/20"
             >
               <span>{bounty.title}</span>
@@ -344,12 +353,14 @@ function GoalGetter({
   kid,
   role,
   young = false,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   role: "parent" | "kid";
   young?: boolean;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [name, setName] = useState("");
@@ -362,7 +373,7 @@ function GoalGetter({
   function handleCreate(event: React.FormEvent) {
     event.preventDefault();
     if (!name.trim() || !target) return;
-    onMutate((s) => createGoal(s, kid.id, name.trim(), Number(target)));
+    onMutate((s) => createGoal(s, kid.id, name.trim(), Number(target), actor));
     setName("");
     setTarget("");
   }
@@ -483,10 +494,12 @@ function DeleteGoalButton({
 function BountyBoard({
   bounties,
   kid,
+  actor,
   onMutate,
 }: {
   bounties: Bounty[];
   kid: KidProfile;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const open = bounties.filter((bounty) => bounty.status === "open");
@@ -504,7 +517,7 @@ function BountyBoard({
             <div className="flex items-center gap-2">
               <span className="text-green-600">{formatCurrency(bounty.reward)}</span>
               <button
-                onClick={() => onMutate((state) => claimBounty(state, bounty.id, kid.id))}
+                onClick={() => onMutate((state) => claimBounty(state, bounty.id, kid.id, actor))}
                 className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
               >
                 Claim

@@ -12,16 +12,18 @@ import {
   virtualAppBalance,
   virtualBalanceForKid,
 } from "@/lib/mutations";
-import type { FamilyBankState } from "@/lib/schema";
+import type { AuditActor, FamilyBankState } from "@/lib/schema";
 
 const inputClass =
   "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
 
 export function ReconciliationPanel({
   state,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export function ReconciliationPanel({
     const kidId = movementKidId || state.kids[0]?.id;
     if (!kidId || !movementAmount) return;
     const signedAmount = movementDirection === "deposit" ? Number(movementAmount) : -Number(movementAmount);
-    tryMutate((s) => recordCashMovementForKid(s, kidId, signedAmount, movementNote.trim() || undefined));
+    tryMutate((s) => recordCashMovementForKid(s, kidId, signedAmount, movementNote.trim() || undefined, actor));
     setMovementAmount("");
     setMovementNote("");
   }

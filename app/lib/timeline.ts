@@ -149,13 +149,22 @@ export function buildMoneyTimeline(
   const simAmount = Math.min(Math.max(options.simAmount ?? 0, 0), simKind === "add" ? Infinity : balance);
   const active = simKind !== undefined && simAmount > 0;
 
+  // Anything currently sitting in an open investment keeps compounding at the market/CD rate,
+  // not the HYSA rate — a projection that lumps it in with cash understates (or overstates) what
+  // an actual held position is worth by the time the projection matters.
+  const investRate = options.investWeeklyRate ?? weeklyRate;
+  const investedNow = positions.filter((position) => !position.closedAt).reduce((sum, p) => sum + p.currentValue, 0);
+  const cashNow = balance - investedNow;
+
   let recoveryWeeks: number | null | undefined;
   if (active && simKind === "withdraw") {
     recoveryWeeks = null;
-    let value = balance - simAmount;
+    let cash = cashNow - simAmount;
+    let invested = investedNow;
     for (let w = 1; w <= MAX_PROJECTION_WEEKS; w++) {
-      value = value * (1 + weeklyRate) + netAllowance;
-      if (value >= balance) {
+      cash = cash * (1 + weeklyRate) + netAllowance;
+      invested = invested * (1 + investRate);
+      if (cash + invested >= balance) {
         recoveryWeeks = w;
         break;
       }
@@ -167,17 +176,21 @@ export function buildMoneyTimeline(
     Math.max(DEFAULT_PROJECTION_WEEKS, recoveryWeeks ? recoveryWeeks + 8 : 0),
   );
 
-  const projectSavings = (from: number): TimelinePoint[] => {
-    const points: TimelinePoint[] = [{ t: todayT, value: round2(from) }];
-    let value = from;
+  // Cash (plus future allowance) grows at the HYSA rate; whatever's actually invested keeps
+  // growing at the market rate — a sim only ever moves money into/out of the cash bucket.
+  const project = (cashFrom: number, investedFrom: number): TimelinePoint[] => {
+    const points: TimelinePoint[] = [{ t: todayT, value: round2(cashFrom + investedFrom) }];
+    let cash = cashFrom;
+    let invested = investedFrom;
     for (let w = 1; w <= horizon; w++) {
-      value = value * (1 + weeklyRate) + netAllowance;
-      points.push({ t: todayT + w * WEEK_MS, value: round2(value) });
+      cash = cash * (1 + weeklyRate) + netAllowance;
+      invested = invested * (1 + investRate);
+      points.push({ t: todayT + w * WEEK_MS, value: round2(cash + invested) });
     }
     return points;
   };
 
-  const future = projectSavings(balance);
+  const future = project(cashNow, investedNow);
   const oneYearBaseline = future[Math.min(DEFAULT_PROJECTION_WEEKS, future.length - 1)].value;
 
   const result: MoneyTimeline = {
@@ -192,25 +205,16 @@ export function buildMoneyTimeline(
   if (active) {
     result.simKind = simKind;
     if (simKind === "withdraw") {
-      result.sim = projectSavings(balance - simAmount);
+      result.sim = project(cashNow - simAmount, investedNow);
       result.preWithdrawalLevel = balance;
       result.recoveryWeeks = recoveryWeeks;
       if (recoveryWeeks) result.recoveryAt = todayT + recoveryWeeks * WEEK_MS;
     } else if (simKind === "add") {
-      result.sim = projectSavings(balance + simAmount);
+      result.sim = project(cashNow + simAmount, investedNow);
     } else {
-      // Invest: the chosen slice grows at the market-history rate while the rest
-      // (plus future allowance) keeps growing at the savings rate.
-      const investRate = options.investWeeklyRate ?? weeklyRate;
-      const points: TimelinePoint[] = [{ t: todayT, value: balance }];
-      let invested = simAmount;
-      let savings = balance - simAmount;
-      for (let w = 1; w <= horizon; w++) {
-        invested = invested * (1 + investRate);
-        savings = savings * (1 + weeklyRate) + netAllowance;
-        points.push({ t: todayT + w * WEEK_MS, value: round2(invested + savings) });
-      }
-      result.sim = points;
+      // Invest: the new slice moves from cash into the invested bucket and grows at the
+      // market-history rate; whatever's already invested keeps compounding right alongside it.
+      result.sim = project(cashNow - simAmount, investedNow + simAmount);
     }
     result.oneYearSim = result.sim[Math.min(DEFAULT_PROJECTION_WEEKS, result.sim.length - 1)].value;
   }

@@ -2,15 +2,17 @@
 
 import { useState } from "react";
 import { payTaxRefund } from "@/lib/mutations";
-import type { FamilyBankState } from "@/lib/schema";
+import type { AuditActor, FamilyBankState } from "@/lib/schema";
 import { InfoTooltip } from "./info-tooltip";
 
 /** Paying out a tax pot is an operational money action, so it lives in the Money tab — the rate that fills it stays in Family Settings. */
 export function TaxPots({
   state,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +20,7 @@ export function TaxPots({
   function handlePayTaxRefund(kidId: string) {
     try {
       setError(null);
-      onMutate((s) => payTaxRefund(s, kidId));
+      onMutate((s) => payTaxRefund(s, kidId, actor));
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : "Something went wrong.");
     }

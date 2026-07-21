@@ -167,6 +167,36 @@ export interface CashAdjustment {
   createdAt: string;
 }
 
+export type AuditActorRole = "parent" | "kid";
+
+/** Whoever triggered a logged action — the signed-in kid, or the parent using this device. */
+export interface AuditActor {
+  role: AuditActorRole;
+  name: string;
+}
+
+/** Enough structured detail to cleanly reverse a specific logged action, rather than guessing from its summary text. */
+export type AuditUndo =
+  | { kind: "remove-transaction"; transactionId: string }
+  | { kind: "remove-investment"; positionId: string; transactionId: string }
+  | { kind: "reopen-investment"; positionId: string; transactionId: string; previousCurrentValue: number }
+  | { kind: "delete-goal"; goalId: string }
+  | { kind: "revert-withdrawal-approval"; requestId: string; transactionId: string; goalId?: string; goalAmount?: number }
+  | { kind: "revert-bounty-claim"; bountyId: string }
+  | { kind: "revert-bounty-approval"; bountyId: string; transactionId: string }
+  | { kind: "restore-tax-pot"; kidId: string; transactionId: string; previousBalance: number };
+
+/** One entry in the family's activity log — who did what, and (when possible) how to undo it. */
+export interface AuditEntry {
+  id: string;
+  at: string;
+  actor: AuditActor;
+  kidId?: string;
+  summary: string;
+  undo?: AuditUndo;
+  undoneAt?: string;
+}
+
 export interface KidHysaBalance {
   kidId: string;
   balance: number;
@@ -202,6 +232,7 @@ export interface FamilyBankState {
   withdrawalRequests: WithdrawalRequest[];
   parentSettings: ParentSettings;
   reconciliation: ReconciliationSnapshot;
+  auditLog: AuditEntry[];
   updatedAt: string;
 }
 
@@ -213,16 +244,19 @@ export const CURRENT_STATE_VERSION = 1;
  *   `actualHysaBalances` array. Rather than guessing how to split the old lump sum, this resets
  *   to an empty per-kid list — the parent re-enters each kid's real balance once.
  * - `parentProfiles` defaults to an empty array if the state predates named parent profiles.
+ * - `auditLog` defaults to an empty array if the state predates the activity log.
  */
 export function normalizeState(state: FamilyBankState): FamilyBankState {
   const legacy = state as unknown as {
     parentProfiles?: ParentProfile[];
     reconciliation?: { actualHysaBalances?: KidHysaBalance[]; cashAdjustments?: CashAdjustment[] };
+    auditLog?: AuditEntry[];
   };
 
   const needsReconciliationFix = !Array.isArray(legacy.reconciliation?.actualHysaBalances);
   const needsParentProfiles = !Array.isArray(legacy.parentProfiles);
-  if (!needsReconciliationFix && !needsParentProfiles) return state;
+  const needsAuditLog = !Array.isArray(legacy.auditLog);
+  if (!needsReconciliationFix && !needsParentProfiles && !needsAuditLog) return state;
 
   return {
     ...state,
@@ -230,6 +264,7 @@ export function normalizeState(state: FamilyBankState): FamilyBankState {
     reconciliation: needsReconciliationFix
       ? { actualHysaBalances: [], cashAdjustments: legacy.reconciliation?.cashAdjustments ?? [] }
       : state.reconciliation,
+    auditLog: needsAuditLog ? [] : state.auditLog,
   };
 }
 
@@ -272,6 +307,7 @@ export function createEmptyState(familyId: string): FamilyBankState {
       actualHysaBalances: [],
       cashAdjustments: [],
     },
+    auditLog: [],
     updatedAt: now,
   };
 }

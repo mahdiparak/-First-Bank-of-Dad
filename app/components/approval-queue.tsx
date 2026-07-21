@@ -2,14 +2,16 @@
 
 import { useState } from "react";
 import { approveBounty, approveWithdrawal, denyBounty, denyWithdrawal } from "@/lib/mutations";
-import type { FamilyBankState } from "@/lib/schema";
+import type { AuditActor, FamilyBankState } from "@/lib/schema";
 
 /** A pure review queue: everything here is a kid-initiated request waiting for a yes/no. Posting new bounties lives in the Money tab. */
 export function ApprovalQueue({
   state,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export function ApprovalQueue({
             </span>
             <div className="flex gap-2">
               <button
-                onClick={() => tryMutate((s) => approveWithdrawal(s, request.id))}
+                onClick={() => tryMutate((s) => approveWithdrawal(s, request.id, actor))}
                 className="rounded-md bg-black px-2 py-1 text-xs text-white dark:bg-white dark:text-black"
               >
                 Approve
@@ -73,7 +75,7 @@ export function ApprovalQueue({
             </span>
             <div className="flex gap-2">
               <button
-                onClick={() => tryMutate((s) => approveBounty(s, bounty.id))}
+                onClick={() => tryMutate((s) => approveBounty(s, bounty.id, actor))}
                 className="rounded-md bg-black px-2 py-1 text-xs text-white dark:bg-white dark:text-black"
               >
                 Approve

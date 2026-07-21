@@ -1,7 +1,41 @@
-import { KID_COLORS, type AssetClass, type DadMatchMilestone, type FamilyBankState, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
+import { KID_COLORS, type AssetClass, type AuditActor, type AuditUndo, type DadMatchMilestone, type FamilyBankState, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
 
 function touch(state: FamilyBankState): FamilyBankState {
   return { ...state, updatedAt: new Date().toISOString() };
+}
+
+const MAX_AUDIT_ENTRIES = 300;
+
+/** Appends one activity-log entry. Called after the state change it's describing, so the entry
+ *  can reference IDs (a new transaction, a new position) the change just created. */
+function logAudit(
+  state: FamilyBankState,
+  actor: AuditActor,
+  summary: string,
+  options: { kidId?: string; undo?: AuditUndo } = {},
+): FamilyBankState {
+  return touch({
+    ...state,
+    auditLog: [
+      ...state.auditLog,
+      {
+        id: crypto.randomUUID(),
+        at: new Date().toISOString(),
+        actor,
+        kidId: options.kidId,
+        summary,
+        undo: options.undo,
+      },
+    ].slice(-MAX_AUDIT_ENTRIES),
+  });
+}
+
+function kidName(state: FamilyBankState, kidId: string): string {
+  return state.kids.find((kid) => kid.id === kidId)?.name ?? "this kid";
+}
+
+function formatCurrency(amount: number): string {
+  return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
 export function totalBalanceForKid(state: FamilyBankState, kidId: string): number {
@@ -157,7 +191,7 @@ export function requestGoalSpend(state: FamilyBankState, goalId: string): Family
 }
 
 /** Parent-side: approves a pending withdrawal, which is what actually debits the kid's balance. */
-export function approveWithdrawal(state: FamilyBankState, requestId: string): FamilyBankState {
+export function approveWithdrawal(state: FamilyBankState, requestId: string, actor: AuditActor): FamilyBankState {
   const request = state.withdrawalRequests.find((candidate) => candidate.id === requestId);
   if (!request || request.status !== "pending") throw new Error("Nothing to approve.");
 
@@ -170,8 +204,9 @@ export function approveWithdrawal(state: FamilyBankState, requestId: string): Fa
     "manual-withdrawal",
     request.reason,
   );
+  const transactionId = withTransaction.transactions[withTransaction.transactions.length - 1].id;
 
-  return {
+  const approved: FamilyBankState = {
     ...withTransaction,
     // A goal-spend is planned spending: it releases the goal's earmark and leaves the streak intact.
     streaks: request.goalId
@@ -188,6 +223,22 @@ export function approveWithdrawal(state: FamilyBankState, requestId: string): Fa
       candidate.id === requestId ? { ...candidate, status: "approved", resolvedAt: now } : candidate,
     ),
   };
+
+  return logAudit(
+    approved,
+    actor,
+    `Approved ${kidName(state, request.kidId)}'s ${request.category} request for ${formatCurrency(request.amount)}`,
+    {
+      kidId: request.kidId,
+      undo: {
+        kind: "revert-withdrawal-approval",
+        requestId,
+        transactionId,
+        goalId: request.goalId,
+        goalAmount: request.goalId ? request.amount : undefined,
+      },
+    },
+  );
 }
 
 /** Parent-side: denies a pending withdrawal. Nothing changes for the kid's balance. */
@@ -206,14 +257,16 @@ export function createGoal(
   kidId: string,
   name: string,
   targetAmount: number,
+  actor: AuditActor,
 ): FamilyBankState {
   if (targetAmount <= 0) throw new Error("Goal target must be positive.");
-  return touch({
+  const goalId = crypto.randomUUID();
+  const withGoal = touch({
     ...state,
     goals: [
       ...state.goals,
       {
-        id: crypto.randomUUID(),
+        id: goalId,
         kidId,
         name,
         targetAmount,
@@ -221,6 +274,10 @@ export function createGoal(
         createdAt: new Date().toISOString(),
       },
     ],
+  });
+  return logAudit(withGoal, actor, `Created goal "${name}" (${formatCurrency(targetAmount)} target) for ${kidName(state, kidId)}`, {
+    kidId,
+    undo: { kind: "delete-goal", goalId },
   });
 }
 
@@ -401,11 +458,11 @@ export function createBounty(state: FamilyBankState, title: string, reward: numb
 }
 
 /** Kid-side: claims an open bounty, putting it in the parent's approval queue. */
-export function claimBounty(state: FamilyBankState, bountyId: string, kidId: string): FamilyBankState {
+export function claimBounty(state: FamilyBankState, bountyId: string, kidId: string, actor: AuditActor): FamilyBankState {
   const bounty = state.bounties.find((candidate) => candidate.id === bountyId);
   if (!bounty || bounty.status !== "open") throw new Error("That bounty isn't available anymore.");
 
-  return touch({
+  const claimed = touch({
     ...state,
     bounties: state.bounties.map((candidate) =>
       candidate.id === bountyId
@@ -413,10 +470,14 @@ export function claimBounty(state: FamilyBankState, bountyId: string, kidId: str
         : candidate,
     ),
   });
+  return logAudit(claimed, actor, `Claimed bounty "${bounty.title}" (${formatCurrency(bounty.reward)})`, {
+    kidId,
+    undo: { kind: "revert-bounty-claim", bountyId },
+  });
 }
 
 /** Parent-side: approves a claimed bounty, which pays out the reward to the kid who claimed it. */
-export function approveBounty(state: FamilyBankState, bountyId: string): FamilyBankState {
+export function approveBounty(state: FamilyBankState, bountyId: string, actor: AuditActor): FamilyBankState {
   const bounty = state.bounties.find((candidate) => candidate.id === bountyId);
   if (!bounty || bounty.status !== "pending-approval" || !bounty.claimedByKidId) {
     throw new Error("Nothing to approve.");
@@ -424,13 +485,20 @@ export function approveBounty(state: FamilyBankState, bountyId: string): FamilyB
 
   const now = new Date().toISOString();
   const withPayout = recordTransaction(state, bounty.claimedByKidId, bounty.reward, "💪", "bounty", bounty.title);
+  const transactionId = withPayout.transactions[withPayout.transactions.length - 1].id;
 
-  return {
+  const approved: FamilyBankState = {
     ...withPayout,
     bounties: withPayout.bounties.map((candidate) =>
       candidate.id === bountyId ? { ...candidate, status: "approved", resolvedAt: now } : candidate,
     ),
   };
+  return logAudit(
+    approved,
+    actor,
+    `Approved bounty "${bounty.title}" for ${kidName(state, bounty.claimedByKidId)} (${formatCurrency(bounty.reward)})`,
+    { kidId: bounty.claimedByKidId, undo: { kind: "revert-bounty-approval", bountyId, transactionId } },
+  );
 }
 
 /** Parent-side: denies a claim and reopens the bounty for anyone to try again. */
@@ -508,11 +576,19 @@ export function recordCashMovementForKid(
   state: FamilyBankState,
   kidId: string,
   amount: number,
-  note?: string,
+  note: string | undefined,
+  actor: AuditActor,
 ): FamilyBankState {
   if (amount === 0) throw new Error("Amount can't be zero.");
   const source: TransactionSource = amount > 0 ? "manual-deposit" : "manual-withdrawal";
-  return recordTransaction(state, kidId, amount, "💵", source, note);
+  const withTransaction = recordTransaction(state, kidId, amount, "💵", source, note);
+  const transactionId = withTransaction.transactions[withTransaction.transactions.length - 1].id;
+  return logAudit(
+    withTransaction,
+    actor,
+    `Recorded ${formatCurrency(Math.abs(amount))} cash ${amount > 0 ? "from" : "to"} ${kidName(state, kidId)}${note ? ` (${note})` : ""}`,
+    { kidId, undo: { kind: "remove-transaction", transactionId } },
+  );
 }
 
 /** Parent-side: a general reconciliation note not tied to any one kid (e.g. bank-paid interest). */
@@ -543,14 +619,20 @@ export function removeCashAdjustment(state: FamilyBankState, adjustmentId: strin
 }
 
 /** Parent-side: pays out a kid's accumulated Family Tax pot as a reward, then zeroes it out. */
-export function payTaxRefund(state: FamilyBankState, kidId: string): FamilyBankState {
+export function payTaxRefund(state: FamilyBankState, kidId: string, actor: AuditActor): FamilyBankState {
   const pot = state.taxPots.find((candidate) => candidate.kidId === kidId);
   if (!pot || pot.balance <= 0) throw new Error("Nothing in the tax pot to refund.");
 
+  const previousBalance = pot.balance;
   const withCredit = recordTransaction(state, kidId, pot.balance, "🧾", "tax", "Tax Refund");
-  return touch({
+  const transactionId = withCredit.transactions[withCredit.transactions.length - 1].id;
+  const refunded = touch({
     ...withCredit,
     taxPots: withCredit.taxPots.map((candidate) => (candidate.kidId === kidId ? { ...candidate, balance: 0 } : candidate)),
+  });
+  return logAudit(refunded, actor, `Paid ${kidName(state, kidId)}'s tax refund (${formatCurrency(previousBalance)})`, {
+    kidId,
+    undo: { kind: "restore-tax-pot", kidId, transactionId, previousBalance },
   });
 }
 
@@ -567,7 +649,8 @@ export function allocateToInvestment(
   kidId: string,
   assetClass: AssetClass,
   amount: number,
-  lockWeeks?: number,
+  lockWeeks: number | undefined,
+  actor: AuditActor,
 ): FamilyBankState {
   if (amount <= 0) throw new Error("Amount must be positive.");
   if (amount > availableBalanceForKid(state, kidId)) {
@@ -583,18 +666,20 @@ export function allocateToInvestment(
     "investment",
     `Invested in ${assetClass}`,
   );
+  const transactionId = withDebit.transactions[withDebit.transactions.length - 1].id;
 
   const maturesAt =
     assetClass === "cd" && lockWeeks
       ? new Date(Date.now() + lockWeeks * 7 * 24 * 60 * 60 * 1000).toISOString()
       : undefined;
 
-  return touch({
+  const positionId = crypto.randomUUID();
+  const invested = touch({
     ...withDebit,
     investments: [
       ...withDebit.investments,
       {
-        id: crypto.randomUUID(),
+        id: positionId,
         kidId,
         assetClass,
         principal: amount,
@@ -606,6 +691,10 @@ export function allocateToInvestment(
       },
     ],
   });
+  return logAudit(invested, actor, `Invested ${formatCurrency(amount)} in ${assetClass} for ${kidName(state, kidId)}`, {
+    kidId,
+    undo: { kind: "remove-investment", positionId, transactionId },
+  });
 }
 
 /**
@@ -613,7 +702,7 @@ export function allocateToInvestment(
  * maturity date forfeits any gains beyond the original principal — the "penalty for early
  * withdrawal" the CD trades its higher rate for.
  */
-export function withdrawFromInvestment(state: FamilyBankState, positionId: string): FamilyBankState {
+export function withdrawFromInvestment(state: FamilyBankState, positionId: string, actor: AuditActor): FamilyBankState {
   const position = state.investments.find((candidate) => candidate.id === positionId);
   if (!position || position.closedAt) throw new Error("Investment not found.");
 
@@ -621,6 +710,7 @@ export function withdrawFromInvestment(state: FamilyBankState, positionId: strin
   const isEarlyCdWithdrawal =
     position.assetClass === "cd" && position.maturesAt && new Date(position.maturesAt) > new Date(now);
   const payout = isEarlyCdWithdrawal ? Math.min(position.currentValue, position.principal) : position.currentValue;
+  const previousCurrentValue = position.currentValue;
 
   const withCredit = recordTransaction(
     state,
@@ -630,11 +720,119 @@ export function withdrawFromInvestment(state: FamilyBankState, positionId: strin
     "investment",
     isEarlyCdWithdrawal ? "Early CD withdrawal (forfeited interest)" : `Cashed out ${position.assetClass}`,
   );
+  const transactionId = withCredit.transactions[withCredit.transactions.length - 1].id;
 
-  return touch({
+  const closed = touch({
     ...withCredit,
     investments: withCredit.investments.map((candidate) =>
       candidate.id === positionId ? { ...candidate, currentValue: payout, closedAt: now } : candidate,
+    ),
+  });
+  return logAudit(closed, actor, `Cashed out ${position.assetClass} for ${kidName(state, position.kidId)} (${formatCurrency(payout)})`, {
+    kidId: position.kidId,
+    undo: { kind: "reopen-investment", positionId, transactionId, previousCurrentValue },
+  });
+}
+
+/**
+ * Parent-side: reverses a logged action using the structured undo data captured when it
+ * happened, rather than a bespoke delete button per feature. Marks the entry undone so it can't
+ * be undone twice; throws (surfaced to the parent) if what it describes has already moved on —
+ * e.g. a bounty that was denied after being approved some other way.
+ */
+export function undoAuditEntry(state: FamilyBankState, entryId: string): FamilyBankState {
+  const entry = state.auditLog.find((candidate) => candidate.id === entryId);
+  if (!entry) throw new Error("That activity entry is gone.");
+  if (entry.undoneAt) throw new Error("Already undone.");
+  if (!entry.undo) throw new Error("This action can't be undone.");
+  const undo = entry.undo;
+
+  let reverted: FamilyBankState;
+  switch (undo.kind) {
+    case "remove-transaction": {
+      reverted = removeTransaction(state, undo.transactionId);
+      break;
+    }
+    case "remove-investment": {
+      const withoutTransaction = removeTransaction(state, undo.transactionId);
+      reverted = touch({
+        ...withoutTransaction,
+        investments: withoutTransaction.investments.filter((position) => position.id !== undo.positionId),
+      });
+      break;
+    }
+    case "reopen-investment": {
+      const withoutTransaction = removeTransaction(state, undo.transactionId);
+      reverted = touch({
+        ...withoutTransaction,
+        investments: withoutTransaction.investments.map((position) =>
+          position.id === undo.positionId
+            ? { ...position, closedAt: undefined, currentValue: undo.previousCurrentValue }
+            : position,
+        ),
+      });
+      break;
+    }
+    case "delete-goal": {
+      reverted = deleteGoal(state, undo.goalId);
+      break;
+    }
+    case "revert-withdrawal-approval": {
+      const withoutTransaction = removeTransaction(state, undo.transactionId);
+      reverted = touch({
+        ...withoutTransaction,
+        withdrawalRequests: withoutTransaction.withdrawalRequests.map((request) =>
+          request.id === undo.requestId ? { ...request, status: "pending", resolvedAt: undefined } : request,
+        ),
+        goals: undo.goalId
+          ? withoutTransaction.goals.map((goal) =>
+              goal.id === undo.goalId ? { ...goal, savedAmount: undo.goalAmount ?? goal.savedAmount, spentAt: undefined } : goal,
+            )
+          : withoutTransaction.goals,
+      });
+      break;
+    }
+    case "revert-bounty-claim": {
+      const bounty = state.bounties.find((candidate) => candidate.id === undo.bountyId);
+      if (!bounty || bounty.status !== "pending-approval") throw new Error("This bounty has already moved on.");
+      reverted = touch({
+        ...state,
+        bounties: state.bounties.map((candidate) =>
+          candidate.id === undo.bountyId
+            ? { ...candidate, status: "open", claimedByKidId: undefined, claimedAt: undefined }
+            : candidate,
+        ),
+      });
+      break;
+    }
+    case "revert-bounty-approval": {
+      const bounty = state.bounties.find((candidate) => candidate.id === undo.bountyId);
+      if (!bounty || bounty.status !== "approved") throw new Error("This bounty has already moved on.");
+      const withoutTransaction = removeTransaction(state, undo.transactionId);
+      reverted = touch({
+        ...withoutTransaction,
+        bounties: withoutTransaction.bounties.map((candidate) =>
+          candidate.id === undo.bountyId ? { ...candidate, status: "pending-approval", resolvedAt: undefined } : candidate,
+        ),
+      });
+      break;
+    }
+    case "restore-tax-pot": {
+      const withoutTransaction = removeTransaction(state, undo.transactionId);
+      reverted = touch({
+        ...withoutTransaction,
+        taxPots: withoutTransaction.taxPots.map((pot) =>
+          pot.kidId === undo.kidId ? { ...pot, balance: undo.previousBalance } : pot,
+        ),
+      });
+      break;
+    }
+  }
+
+  return touch({
+    ...reverted,
+    auditLog: reverted.auditLog.map((candidate) =>
+      candidate.id === entryId ? { ...candidate, undoneAt: new Date().toISOString() } : candidate,
     ),
   });
 }
