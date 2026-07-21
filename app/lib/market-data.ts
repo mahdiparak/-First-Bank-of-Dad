@@ -14,6 +14,8 @@ export interface PricePoint {
 export interface MarketDataResponse {
   updatedAt: string | null;
   stockProvider: string | null;
+  /** Per-source failure detail from the Worker's last refresh — why a feed is empty/stale. */
+  lastErrors?: { stocks?: string; crypto?: string } | null;
   stocks: PricePoint[];
   crypto: PricePoint[];
 }

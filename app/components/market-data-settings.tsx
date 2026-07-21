@@ -118,10 +118,17 @@ export function MarketDataSettings({
         );
         return;
       }
-      const data = (await res.json()) as { stocks?: unknown[]; crypto?: unknown[] };
-      setTestResult(
-        `✅ Connected — ${data.stocks?.length ?? 0} stock points, ${data.crypto?.length ?? 0} crypto points stored.`,
-      );
+      const data = (await res.json()) as {
+        stocks?: unknown[];
+        crypto?: unknown[];
+        lastErrors?: { stocks?: string; crypto?: string } | null;
+      };
+      const counts = `✅ Connected — ${data.stocks?.length ?? 0} stock points, ${data.crypto?.length ?? 0} crypto points stored.`;
+      const errorParts = [
+        data.lastErrors?.stocks ? `stocks: ${data.lastErrors.stocks}` : null,
+        data.lastErrors?.crypto ? `crypto: ${data.lastErrors.crypto}` : null,
+      ].filter(Boolean);
+      setTestResult(errorParts.length > 0 ? `${counts} ⚠️ Last refresh errors — ${errorParts.join(" · ")}` : counts);
     } catch {
       setTestResult(
         "❌ The browser couldn't reach this URL at all (not even an error page). Usual causes: a typo in the URL, the Worker isn't deployed, its workers.dev route is disabled, or Cloudflare Access is protecting the Worker and intercepting the request with a login page. Open the URL below directly in a new browser tab to see which one it is.",
@@ -146,6 +153,12 @@ export function MarketDataSettings({
           "No market data loaded yet."
         )}
       </div>
+      {marketData?.lastErrors?.stocks && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">⚠️ stocks: {marketData.lastErrors.stocks}</p>
+      )}
+      {marketData?.lastErrors?.crypto && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">⚠️ crypto: {marketData.lastErrors.crypto}</p>
+      )}
 
       <div className="space-y-1 rounded-lg border border-black/10 p-2 dark:border-white/10">
         <p className="text-xs opacity-70">Feed URL (from this build&apos;s NEXT_PUBLIC_MARKET_DATA_URL):</p>

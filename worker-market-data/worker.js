@@ -46,6 +46,15 @@ async function getConfig(env) {
   return (await env.MARKET_KV.get(KV_KEY_CONFIG, 'json')) || {};
 }
 
+// Several of these free feeds rate-limit or bot-block datacenter IPs (which is what a
+// Cloudflare Worker egresses from) while still answering HTTP 200 with an error body —
+// so every fetcher must treat "no usable rows" as a failure, or a blocked source would
+// silently overwrite good history with nothing.
+function assertPoints(points, sourceName) {
+  if (points.length === 0) throw new Error(`${sourceName} returned no usable data (likely rate-limited or blocked)`);
+  return points;
+}
+
 async function fetchStooqDaily() {
   const res = await fetch(`https://stooq.com/q/d/l/?s=${STOCK_SYMBOL_STOOQ}&i=d`);
   if (!res.ok) throw new Error(`Stooq request failed: ${res.status}`);
@@ -59,7 +68,25 @@ async function fetchStooqDaily() {
       points.push({ date, close: value });
     }
   }
-  return points;
+  return assertPoints(points, 'Stooq');
+}
+
+async function fetchYahooDaily() {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${STOCK_SYMBOL_ALPHA}?range=2y&interval=1d`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (FirstBankOfDad market feeder)' } });
+  if (!res.ok) throw new Error(`Yahoo request failed: ${res.status}`);
+  const json = await res.json();
+  const result = json?.chart?.result?.[0];
+  const timestamps = result?.timestamp || [];
+  const closes = result?.indicators?.quote?.[0]?.close || [];
+  const points = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    const close = Number(closes[i]);
+    if (Number.isFinite(close)) {
+      points.push({ date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10), close });
+    }
+  }
+  return assertPoints(points, 'Yahoo');
 }
 
 async function fetchAlphaVantageDaily(apiKey) {
@@ -81,10 +108,31 @@ async function fetchCoinGeckoDaily() {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`CoinGecko request failed: ${res.status}`);
   const json = await res.json();
-  return (json.prices || []).map(([timestampMs, price]) => ({
-    date: new Date(timestampMs).toISOString().slice(0, 10),
-    close: price,
-  }));
+  const points = (json.prices || [])
+    .map(([timestampMs, price]) => ({
+      date: new Date(timestampMs).toISOString().slice(0, 10),
+      close: Number(price),
+    }))
+    .filter((point) => Number.isFinite(point.close));
+  return assertPoints(points, 'CoinGecko');
+}
+
+async function fetchKrakenDaily() {
+  // Kraken's public OHLC endpoint returns ~720 daily candles, no auth, and is
+  // reliably reachable from Workers — the fallback when CoinGecko bot-blocks us.
+  const res = await fetch('https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1440');
+  if (!res.ok) throw new Error(`Kraken request failed: ${res.status}`);
+  const json = await res.json();
+  if (json.error?.length) throw new Error(`Kraken error: ${json.error.join('; ')}`);
+  const series = Object.values(json.result || {}).find(Array.isArray) || [];
+  const points = [];
+  for (const candle of series) {
+    const close = Number(candle?.[4]);
+    if (Number.isFinite(close)) {
+      points.push({ date: new Date(candle[0] * 1000).toISOString().slice(0, 10), close });
+    }
+  }
+  return assertPoints(points, 'Kraken');
 }
 
 function mergeHistory(existing, incoming) {
@@ -98,38 +146,45 @@ function mergeHistory(existing, incoming) {
     .slice(-HISTORY_DAYS);
 }
 
+// Tries each provider in order until one yields data. Every failure along the way is
+// reported — even when a later fallback succeeded — so "stooq is blocking us and we're
+// coasting on yahoo" is visible instead of silent.
+async function fetchWithFallbacks(providers) {
+  const failures = [];
+  for (const [name, fetcher] of providers) {
+    try {
+      const points = await fetcher();
+      return { points, provider: name, error: failures.length > 0 ? failures.join(' | ') : undefined };
+    } catch (error) {
+      failures.push(`${name}: ${error?.message || error}`);
+    }
+  }
+  return { points: null, provider: null, error: failures.join(' | ') };
+}
+
 // One data source failing must never sink the other (or the whole request): each
-// source is fetched independently, whatever succeeded is saved, and per-source
-// errors are reported back / recorded in meta instead of thrown.
+// feed runs its own provider-fallback chain independently, whatever succeeded is
+// saved, and per-source errors are reported back / recorded in meta instead of thrown.
 async function refreshMarketData(env) {
   const config = await getConfig(env);
   const errors = {};
 
-  let stockPoints = null;
-  let stockProvider = null;
-  try {
-    if (config.alphaVantageApiKey) {
-      stockPoints = await fetchAlphaVantageDaily(config.alphaVantageApiKey);
-      stockProvider = 'alphavantage';
-    } else {
-      stockPoints = await fetchStooqDaily();
-      stockProvider = 'stooq';
-    }
-  } catch (primaryError) {
-    try {
-      stockPoints = await fetchStooqDaily();
-      stockProvider = 'stooq-fallback';
-    } catch (fallbackError) {
-      errors.stocks = `${primaryError?.message || primaryError}; fallback: ${fallbackError?.message || fallbackError}`;
-    }
+  const stockProviders = [];
+  if (config.alphaVantageApiKey) {
+    stockProviders.push(['alphavantage', () => fetchAlphaVantageDaily(config.alphaVantageApiKey)]);
   }
+  stockProviders.push(['stooq', fetchStooqDaily], ['yahoo', fetchYahooDaily]);
+  const stockResult = await fetchWithFallbacks(stockProviders);
+  const stockPoints = stockResult.points;
+  const stockProvider = stockResult.provider;
+  if (stockResult.error) errors.stocks = stockResult.error;
 
-  let cryptoPoints = null;
-  try {
-    cryptoPoints = await fetchCoinGeckoDaily();
-  } catch (cryptoError) {
-    errors.crypto = String(cryptoError?.message || cryptoError);
-  }
+  const cryptoResult = await fetchWithFallbacks([
+    ['coingecko', fetchCoinGeckoDaily],
+    ['kraken', fetchKrakenDaily],
+  ]);
+  const cryptoPoints = cryptoResult.points;
+  if (cryptoResult.error) errors.crypto = cryptoResult.error;
 
   const [existingStocks, existingCrypto, existingMeta] = await Promise.all([
     env.MARKET_KV.get(KV_KEY_STOCK_HISTORY, 'json'),
@@ -202,6 +257,8 @@ async function handleRequest(request, env) {
       return jsonResponse({
         updatedAt: meta?.updatedAt ?? null,
         stockProvider: meta?.stockProvider ?? null,
+        // Surfaced so the app can show WHY a feed is empty without needing the admin token.
+        lastErrors: meta?.lastErrors ?? null,
         stocks: stocks || [],
         crypto: crypto || [],
       });
