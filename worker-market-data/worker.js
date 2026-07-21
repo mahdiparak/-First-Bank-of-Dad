@@ -14,6 +14,10 @@
 // (bad/rate-limited key), the fetch falls back to Stooq automatically.
 
 const HISTORY_DAYS = 730;
+// CoinGecko's free/public API caps historical queries at 365 days and reserves the
+// `interval` parameter for paid plans — asking for more than either returns an error,
+// not a truncated result. The rolling KV window still grows past 365 days over time.
+const CRYPTO_FETCH_DAYS = 365;
 const STOCK_SYMBOL_STOOQ = 'spy.us';
 const STOCK_SYMBOL_ALPHA = 'SPY';
 const CRYPTO_COINGECKO_ID = 'bitcoin';
@@ -73,7 +77,7 @@ async function fetchAlphaVantageDaily(apiKey) {
 }
 
 async function fetchCoinGeckoDaily() {
-  const url = `https://api.coingecko.com/api/v3/coins/${CRYPTO_COINGECKO_ID}/market_chart?vs_currency=usd&days=${HISTORY_DAYS}&interval=daily`;
+  const url = `https://api.coingecko.com/api/v3/coins/${CRYPTO_COINGECKO_ID}/market_chart?vs_currency=usd&days=${CRYPTO_FETCH_DAYS}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`CoinGecko request failed: ${res.status}`);
   const json = await res.json();
@@ -94,11 +98,15 @@ function mergeHistory(existing, incoming) {
     .slice(-HISTORY_DAYS);
 }
 
+// One data source failing must never sink the other (or the whole request): each
+// source is fetched independently, whatever succeeded is saved, and per-source
+// errors are reported back / recorded in meta instead of thrown.
 async function refreshMarketData(env) {
   const config = await getConfig(env);
+  const errors = {};
 
-  let stockPoints;
-  let stockProvider;
+  let stockPoints = null;
+  let stockProvider = null;
   try {
     if (config.alphaVantageApiKey) {
       stockPoints = await fetchAlphaVantageDaily(config.alphaVantageApiKey);
@@ -107,29 +115,51 @@ async function refreshMarketData(env) {
       stockPoints = await fetchStooqDaily();
       stockProvider = 'stooq';
     }
-  } catch {
-    stockPoints = await fetchStooqDaily();
-    stockProvider = 'stooq-fallback';
+  } catch (primaryError) {
+    try {
+      stockPoints = await fetchStooqDaily();
+      stockProvider = 'stooq-fallback';
+    } catch (fallbackError) {
+      errors.stocks = `${primaryError?.message || primaryError}; fallback: ${fallbackError?.message || fallbackError}`;
+    }
   }
 
-  const cryptoPoints = await fetchCoinGeckoDaily();
+  let cryptoPoints = null;
+  try {
+    cryptoPoints = await fetchCoinGeckoDaily();
+  } catch (cryptoError) {
+    errors.crypto = String(cryptoError?.message || cryptoError);
+  }
 
-  const [existingStocks, existingCrypto] = await Promise.all([
+  const [existingStocks, existingCrypto, existingMeta] = await Promise.all([
     env.MARKET_KV.get(KV_KEY_STOCK_HISTORY, 'json'),
     env.MARKET_KV.get(KV_KEY_CRYPTO_HISTORY, 'json'),
+    env.MARKET_KV.get(KV_KEY_META, 'json'),
   ]);
 
-  const mergedStocks = mergeHistory(existingStocks || [], stockPoints);
-  const mergedCrypto = mergeHistory(existingCrypto || [], cryptoPoints);
+  const mergedStocks = stockPoints ? mergeHistory(existingStocks || [], stockPoints) : existingStocks || [];
+  const mergedCrypto = cryptoPoints ? mergeHistory(existingCrypto || [], cryptoPoints) : existingCrypto || [];
 
-  await Promise.all([
-    env.MARKET_KV.put(KV_KEY_STOCK_HISTORY, JSON.stringify(mergedStocks)),
-    env.MARKET_KV.put(KV_KEY_CRYPTO_HISTORY, JSON.stringify(mergedCrypto)),
+  const writes = [
     env.MARKET_KV.put(
       KV_KEY_META,
-      JSON.stringify({ updatedAt: new Date().toISOString(), stockProvider })
+      JSON.stringify({
+        updatedAt: new Date().toISOString(),
+        stockProvider: stockProvider ?? existingMeta?.stockProvider ?? null,
+        lastErrors: Object.keys(errors).length > 0 ? errors : undefined,
+      })
     ),
-  ]);
+  ];
+  if (stockPoints) writes.push(env.MARKET_KV.put(KV_KEY_STOCK_HISTORY, JSON.stringify(mergedStocks)));
+  if (cryptoPoints) writes.push(env.MARKET_KV.put(KV_KEY_CRYPTO_HISTORY, JSON.stringify(mergedCrypto)));
+  await Promise.all(writes);
+
+  return {
+    stockProvider,
+    stockPoints: mergedStocks.length,
+    cryptoPoints: mergedCrypto.length,
+    errors: Object.keys(errors).length > 0 ? errors : undefined,
+  };
 }
 
 function isAuthorized(request, env) {
@@ -140,6 +170,22 @@ function isAuthorized(request, env) {
 
 export default {
   async fetch(request, env) {
+    // Any uncaught exception would surface as a Cloudflare error page with no CORS
+    // headers, which browsers report as an opaque "Failed to fetch" — so every
+    // failure gets converted into a JSON error response the client can display.
+    try {
+      return await handleRequest(request, env);
+    } catch (error) {
+      return jsonResponse({ error: String(error?.message || error) }, 500);
+    }
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(refreshMarketData(env));
+  },
+};
+
+async function handleRequest(request, env) {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
@@ -186,14 +232,9 @@ export default {
       if (!isAuthorized(request, env)) {
         return jsonResponse({ error: 'Unauthorized' }, 401);
       }
-      await refreshMarketData(env);
-      return jsonResponse({ ok: true });
+      const summary = await refreshMarketData(env);
+      return jsonResponse({ ok: true, ...summary });
     }
 
     return jsonResponse({ error: 'Not found' }, 404);
-  },
-
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(refreshMarketData(env));
-  },
-};
+}

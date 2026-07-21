@@ -10,7 +10,7 @@ function adminUrl(path: string): string {
   return `${origin}${path}`;
 }
 
-async function postAdmin(path: string, adminToken: string, body?: unknown): Promise<void> {
+async function postAdmin(path: string, adminToken: string, body?: unknown): Promise<unknown> {
   if (!MARKET_DATA_URL) throw new Error("Market data isn't configured for this build (NEXT_PUBLIC_MARKET_DATA_URL is unset).");
 
   const res = await fetch(adminUrl(path), {
@@ -24,7 +24,18 @@ async function postAdmin(path: string, adminToken: string, body?: unknown): Prom
 
   if (!res.ok) {
     if (res.status === 401) throw new Error("Wrong admin token.");
-    throw new Error(`Request failed (${res.status}).`);
+    let detail = "";
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? "";
+    } catch {
+      // non-JSON error body — fall back to the status code
+    }
+    throw new Error(detail || `Request failed (${res.status}).`);
+  }
+  try {
+    return await res.json();
+  } catch {
+    return {};
   }
 }
 
@@ -33,7 +44,14 @@ export async function setAlphaVantageApiKey(adminToken: string, apiKey: string):
   await postAdmin("/admin/config", adminToken, { alphaVantageApiKey: apiKey });
 }
 
+export interface RefreshSummary {
+  stockProvider?: string | null;
+  stockPoints?: number;
+  cryptoPoints?: number;
+  errors?: { stocks?: string; crypto?: string };
+}
+
 /** Tells the Worker to fetch fresh market data right now, instead of waiting for its daily Cron Trigger. */
-export async function triggerMarketDataRefresh(adminToken: string): Promise<void> {
-  await postAdmin("/admin/refresh", adminToken);
+export async function triggerMarketDataRefresh(adminToken: string): Promise<RefreshSummary> {
+  return (await postAdmin("/admin/refresh", adminToken)) as RefreshSummary;
 }

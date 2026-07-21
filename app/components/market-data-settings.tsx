@@ -90,10 +90,16 @@ export function MarketDataSettings({
 
   async function handleRefreshNow() {
     await withToken(async (token) => {
-      await triggerMarketDataRefresh(token);
+      const summary = await triggerMarketDataRefresh(token);
       const fresh = await loadMarketData({ force: true });
       onMarketDataRefreshed(fresh);
-      setMessage("Market data refreshed.");
+      const parts = [
+        `stocks: ${summary.stockPoints ?? 0} points${summary.stockProvider ? ` (${summary.stockProvider})` : ""}`,
+        `crypto: ${summary.cryptoPoints ?? 0} points`,
+      ];
+      if (summary.errors?.stocks) parts.push(`⚠️ stocks error: ${summary.errors.stocks}`);
+      if (summary.errors?.crypto) parts.push(`⚠️ crypto error: ${summary.errors.crypto}`);
+      setMessage(`Refreshed — ${parts.join(" · ")}`);
     });
   }
 
