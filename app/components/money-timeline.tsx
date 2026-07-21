@@ -73,32 +73,67 @@ export function MoneyTimeline({
   const fullMin = timeline.past[0].t;
   const fullMax = allPoints[allPoints.length - 1].t;
   const selectedRange = RANGES.find((entry) => entry.id === range);
-  // Range tabs are lookback windows onto real history, not the projection — zooming to "15D"
-  // means the last 15 real days, so the domain's right edge pins to today rather than the future.
-  const tMax = selectedRange?.days ? timeline.todayT : fullMax;
+  const FUTURE_MIN_MS = 182 * DAY_MS; // the impact of a withdrawal/deposit needs real runway to read as a story
+  const FUTURE_MAX_MS = 365 * DAY_MS;
+  // Range tabs zoom the lookback window, but the projection — the whole point of "what if I…" —
+  // always gets at least 6 months of runway (scaling up to a year for the wider lookbacks) so the
+  // impact of a withdrawal or deposit is never zoomed out of view.
+  const tMax = selectedRange?.days
+    ? Math.min(fullMax, timeline.todayT + Math.min(FUTURE_MAX_MS, Math.max(FUTURE_MIN_MS, selectedRange.days * DAY_MS * 2)))
+    : fullMax;
   const tMin = selectedRange?.days ? Math.max(fullMin, timeline.todayT - selectedRange.days * DAY_MS) : fullMin;
 
   const visiblePast = clipToWindow(timeline.past, tMin, tMax);
   const visibleFuture = clipToWindow(timeline.future, tMin, tMax);
   const visibleSim = timeline.sim ? clipToWindow(timeline.sim, tMin, tMax) : undefined;
   const visibleEvents = timeline.events.filter((event) => event.t >= tMin && event.t <= tMax);
+  const hasSim = Boolean(visibleSim && visibleSim.length > 0);
 
   const visiblePoints = [...visiblePast, ...visibleFuture, ...(visibleSim ?? [])];
-  const vMax = Math.max(...visiblePoints.map((p) => p.value), 1);
+  // A withdrawal of $20 on a $600 balance is a rounding error against a $0-based axis spanning
+  // years of history — with a sim active, scale to just the two compared lines so the gap reads.
+  const scalePoints = hasSim ? [...visibleFuture, ...(visibleSim ?? [])] : visiblePoints;
+  const dataMax = Math.max(...scalePoints.map((p) => p.value), 1);
+  const dataMin = hasSim ? Math.min(...scalePoints.map((p) => p.value)) : Math.min(0, dataMax);
 
-  const rawStep = vMax / 4;
+  const span = Math.max(dataMax - dataMin, 1);
+  const rawStep = span / 4;
   const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
   const normalized = rawStep / magnitude;
   const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
-  const yTop = Math.ceil(vMax / step) * step;
+  const yTop = Math.ceil(dataMax / step) * step;
+  const yBottom = hasSim ? Math.floor(dataMin / step) * step : 0;
 
   const x = (t: number) => MARGIN.left + ((t - tMin) / (tMax - tMin)) * (WIDTH - MARGIN.left - MARGIN.right);
-  const y = (v: number) => HEIGHT - MARGIN.bottom - (v / yTop) * (HEIGHT - MARGIN.top - MARGIN.bottom);
+  const y = (v: number) =>
+    HEIGHT - MARGIN.bottom - ((v - yBottom) / (yTop - yBottom)) * (HEIGHT - MARGIN.top - MARGIN.bottom);
   const path = (points: TimelinePoint[]) =>
     points.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.t).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
+  /** Closed polygon between two aligned point series, for shading the gap a sim opens up. */
+  const bandPath = (a: TimelinePoint[], b: TimelinePoint[]) => {
+    if (a.length === 0 || b.length === 0) return "";
+    const forward = a.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.t).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
+    const backward = [...b]
+      .reverse()
+      .map((p) => `L${x(p.t).toFixed(1)},${y(p.value).toFixed(1)}`)
+      .join(" ");
+    return `${forward} ${backward} Z`;
+  };
 
   const yTicks: number[] = [];
-  for (let v = 0; v <= yTop + 1e-9; v += step) yTicks.push(v);
+  for (let v = yBottom; v <= yTop + 1e-9; v += step) yTicks.push(v);
+
+  // The gap at the right edge of whatever window is currently visible — same number the chart's
+  // shaded band and corner marker are showing, surfaced as a headline instead of a corner label,
+  // since the chart's own horizontal scroll area can hide that corner on a narrow phone.
+  const lastVisibleFuture = visibleFuture[visibleFuture.length - 1];
+  const lastVisibleSim = visibleSim?.[visibleSim.length - 1];
+  const visibleDelta =
+    lastVisibleFuture && lastVisibleSim ? lastVisibleSim.value - lastVisibleFuture.value : null;
+  const visibleDeltaMonths =
+    lastVisibleFuture && timeline.todayT
+      ? Math.round((lastVisibleFuture.t - timeline.todayT) / (30 * DAY_MS))
+      : 0;
 
   // Short windows get day-spaced ticks with a month+day label; the full history falls back to
   // 6-month ticks so years of data don't produce an unreadable wall of labels.
@@ -187,7 +222,7 @@ export function MoneyTimeline({
       </div>
 
       <div className="overflow-x-auto">
-        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="min-w-[480px] w-full" aria-label="Balance over time">
+        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" aria-label="Balance over time">
           {yTicks.map((v) => (
             <g key={v}>
               <line
@@ -227,6 +262,11 @@ export function MoneyTimeline({
             </g>
           ))}
 
+          {/* the gap itself, shaded, is easier for a kid to read at a glance than two crossing lines */}
+          {visibleSim && simStyle && (
+            <path d={bandPath(visibleFuture, visibleSim)} fill={simStyle.color} fillOpacity="0.16" stroke="none" />
+          )}
+
           {timeline.simKind === "withdraw" && timeline.preWithdrawalLevel !== undefined && (
             <line
               x1={x(timeline.todayT)}
@@ -250,11 +290,43 @@ export function MoneyTimeline({
           />
 
           {visibleSim && simStyle && (
-            <path d={path(visibleSim)} fill="none" stroke={simStyle.color} strokeWidth="2" strokeDasharray="5 5" />
+            <path d={path(visibleSim)} fill="none" stroke={simStyle.color} strokeWidth="3" strokeDasharray="5 5" />
           )}
 
           {timeline.simKind === "withdraw" && timeline.recoveryAt && timeline.preWithdrawalLevel !== undefined && (
-            <circle cx={x(timeline.recoveryAt)} cy={y(timeline.preWithdrawalLevel)} r="4.5" fill="#22c55e" />
+            <>
+              <circle cx={x(timeline.recoveryAt)} cy={y(timeline.preWithdrawalLevel)} r="4.5" fill="#22c55e" />
+              {timeline.recoveryAt <= tMax && (
+                <text
+                  x={Math.min(x(timeline.recoveryAt) + 6, WIDTH - MARGIN.right - 4)}
+                  y={y(timeline.preWithdrawalLevel) - 8}
+                  fontSize="10"
+                  fontWeight="700"
+                  fill="#22c55e"
+                >
+                  Back to normal! 🎉
+                </text>
+              )}
+            </>
+          )}
+
+          {/* end-of-window marker: a visual anchor for the headline callout below the chart (the
+              chart itself scrolls horizontally on narrow phones, so this corner isn't guaranteed
+              visible — the number that matters is repeated as a badge outside the scroll area) */}
+          {lastVisibleSim && lastVisibleFuture && simStyle && (
+            <g>
+              <line
+                x1={x(lastVisibleFuture.t)}
+                x2={x(lastVisibleFuture.t)}
+                y1={y(lastVisibleFuture.value)}
+                y2={y(lastVisibleSim.value)}
+                stroke={simStyle.color}
+                strokeOpacity="0.5"
+                strokeWidth="1.5"
+              />
+              <circle cx={x(lastVisibleFuture.t)} cy={y(lastVisibleFuture.value)} r="2.5" fill={color} fillOpacity="0.7" />
+              <circle cx={x(lastVisibleFuture.t)} cy={y(lastVisibleSim.value)} r="2.5" fill={simStyle.color} />
+            </g>
           )}
 
           {/* real money events, annotated with their emoji (same-day events stack upward) */}
@@ -340,7 +412,26 @@ export function MoneyTimeline({
         )}
       </form>
       {error && <p className="text-sm text-red-500">{error}</p>}
-      {summary && <p className="text-sm">{summary}</p>}
+
+      {/* The headline number, big and outside the chart's horizontal-scroll area, so the impact
+          of a withdrawal/deposit is never something a kid has to go scroll sideways to find. */}
+      {activeSim && visibleDelta !== null && simStyle && (
+        <div
+          className="rounded-xl border-2 p-4"
+          style={{ borderColor: simStyle.color, backgroundColor: `${simStyle.color}1a` }}
+        >
+          <p className="text-3xl font-bold tabular-nums" style={{ color: visibleDelta >= 0 ? "#16a34a" : "#dc2626" }}>
+            {visibleDelta >= 0 ? "+" : "-"}
+            {formatCurrency(Math.abs(visibleDelta))}
+          </p>
+          <p className="text-sm opacity-70">
+            {visibleDelta >= 0 ? "more" : "less"} than if you hadn&apos;t{" "}
+            {timeline.simKind === "withdraw" ? "taken it out" : timeline.simKind === "add" ? "added it" : "invested it"},
+            {" "}in about {visibleDeltaMonths} month{visibleDeltaMonths === 1 ? "" : "s"}
+          </p>
+          {summary && <p className="mt-2 text-sm">{summary}</p>}
+        </div>
+      )}
     </section>
   );
 }
