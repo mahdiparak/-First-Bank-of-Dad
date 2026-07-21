@@ -16,6 +16,7 @@ const inputClass =
   "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
 
 const MARKET_DATA_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_MARKET_DATA_URL);
+const MARKET_DATA_URL = process.env.NEXT_PUBLIC_MARKET_DATA_URL ?? "";
 
 export function MarketDataSettings({
   marketData,
@@ -29,6 +30,7 @@ export function MarketDataSettings({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<string | null>(null);
 
   useEffect(() => {
     void loadMarketDataAdminToken().then((token) => {
@@ -95,6 +97,32 @@ export function MarketDataSettings({
     });
   }
 
+  /**
+   * Distinguishes the failure modes a bare "Failed to fetch" hides: a network/CORS-level
+   * failure (wrong URL, Worker not deployed, or an Access login page intercepting the call)
+   * vs. an HTTP error vs. actually working.
+   */
+  async function handleTestConnection() {
+    setTestResult("Testing…");
+    try {
+      const res = await fetch(MARKET_DATA_URL);
+      if (!res.ok) {
+        setTestResult(
+          `Reached the server but got HTTP ${res.status}. The Worker is running — check that the URL ends with /market-data.`,
+        );
+        return;
+      }
+      const data = (await res.json()) as { stocks?: unknown[]; crypto?: unknown[] };
+      setTestResult(
+        `✅ Connected — ${data.stocks?.length ?? 0} stock points, ${data.crypto?.length ?? 0} crypto points stored.`,
+      );
+    } catch {
+      setTestResult(
+        "❌ The browser couldn't reach this URL at all (not even an error page). Usual causes: a typo in the URL, the Worker isn't deployed, its workers.dev route is disabled, or Cloudflare Access is protecting the Worker and intercepting the request with a login page. Open the URL below directly in a new browser tab to see which one it is.",
+      );
+    }
+  }
+
   return (
     <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
       <h2 className="font-semibold">Market Data</h2>
@@ -111,6 +139,23 @@ export function MarketDataSettings({
         ) : (
           "No market data loaded yet."
         )}
+      </div>
+
+      <div className="space-y-1 rounded-lg border border-black/10 p-2 dark:border-white/10">
+        <p className="text-xs opacity-70">Feed URL (from this build&apos;s NEXT_PUBLIC_MARKET_DATA_URL):</p>
+        <a href={MARKET_DATA_URL} target="_blank" rel="noreferrer" className="break-all text-xs underline opacity-80">
+          {MARKET_DATA_URL}
+        </a>
+        <div>
+          <button
+            type="button"
+            onClick={() => void handleTestConnection()}
+            className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
+          >
+            Test connection
+          </button>
+        </div>
+        {testResult && <p className="text-xs opacity-80">{testResult}</p>}
       </div>
 
       {error && <p className="text-sm text-red-500">{error}</p>}
