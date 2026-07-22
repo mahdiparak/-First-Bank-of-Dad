@@ -35,7 +35,9 @@ export function WithdrawalConfirmDialog({
   const balance = timeline.past[timeline.past.length - 1].value;
   const color = kidColor(kid);
 
-  const horizonWeeks = Math.min(timeline.future.length - 1, Math.max(26, (timeline.recoveryWeeks ?? 0) + 8));
+  // A short horizon keeps the near-term — the part that actually matters for "should I do this
+  // right now" — from getting diluted by unrelated months of allowance growth.
+  const horizonWeeks = Math.min(timeline.future.length - 1, Math.max(12, (timeline.recoveryWeeks ?? 0) + 6));
   const future = timeline.future.slice(0, horizonWeeks + 1);
   const sim = (timeline.sim ?? future).slice(0, horizonWeeks + 1);
 
@@ -47,16 +49,24 @@ export function WithdrawalConfirmDialog({
 
   const tMin = future[0].t;
   const tMax = future[future.length - 1].t;
+
+  // A withdrawal that's small next to the kid's balance (say $10 out of $1,600) barely moves the
+  // needle on a plain linear axis — months of ordinary allowance growth swamp the gap and the two
+  // lines look like one. Instead of scaling to raw dollars, scale to distance from *today's*
+  // balance: values near it (where the actual comparison lives) get stretched out, values far from
+  // it (mostly just "time passing") get compressed. A sqrt keeps this smooth in both directions.
+  const warp = (v: number) => Math.sign(v - balance) * Math.sqrt(Math.abs(v - balance));
   const values = [...future, ...sim].map((p) => p.value);
-  const dataMax = Math.max(...values);
-  const dataMin = Math.min(...values);
-  const pad = Math.max((dataMax - dataMin) * 0.15, 1);
-  const yTop = dataMax + pad;
-  const yBottom = Math.max(0, dataMin - pad);
+  const warped = values.map(warp);
+  const wMax = Math.max(...warped, 0);
+  const wMin = Math.min(...warped, 0);
+  const wPad = Math.max((wMax - wMin) * 0.1, 0.4);
+  const wTop = wMax + wPad;
+  const wBottom = wMin - wPad;
 
   const x = (t: number) => MARGIN.left + ((t - tMin) / (tMax - tMin || 1)) * (WIDTH - MARGIN.left - MARGIN.right);
   const y = (v: number) =>
-    HEIGHT - MARGIN.bottom - ((v - yBottom) / (yTop - yBottom || 1)) * (HEIGHT - MARGIN.top - MARGIN.bottom);
+    HEIGHT - MARGIN.bottom - ((warp(v) - wBottom) / (wTop - wBottom || 1)) * (HEIGHT - MARGIN.top - MARGIN.bottom);
   const path = (points: TimelinePoint[]) =>
     points.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.t).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
   const bandPath = (a: TimelinePoint[], b: TimelinePoint[]) => {
