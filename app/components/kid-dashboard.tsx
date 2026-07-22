@@ -188,7 +188,7 @@ function HomeTab({
         </div>
       </section>
 
-      <BadgeWall state={state} kid={kid} />
+      <BadgeWall state={state} kid={kid} role={role} actor={actor} onMutate={onMutate} />
     </div>
   );
 }

@@ -7,6 +7,8 @@ export interface Badge {
   title: string;
   description: string;
   earned: boolean;
+  /** True when a parent hid this badge (it would otherwise be earned) — lets the UI offer "restore" instead of a plain locked tile. */
+  revoked: boolean;
 }
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -26,7 +28,8 @@ function runningMaxBalance(state: FamilyBankState, kidId: string): number {
   return max;
 }
 
-/** All badges for one kid, earned or not — recomputed from state, nothing stored. */
+/** All badges for one kid, earned or not — recomputed from state, nothing stored except a
+ *  per-kid list of ids a parent has manually hidden (e.g. a badge awarded by a data mistake). */
 export function badgesForKid(state: FamilyBankState, kidId: string): Badge[] {
   const mine = (source: string) =>
     state.transactions.some((transaction) => transaction.kidId === kidId && transaction.source === source);
@@ -35,8 +38,9 @@ export function badgesForKid(state: FamilyBankState, kidId: string): Badge[] {
   const myPositions = state.investments.filter((position) => position.kidId === kidId);
   const streakWeeks = weeksWithoutWithdrawalFor(state, kidId);
   const now = Date.now();
+  const hiddenIds = new Set(state.kids.find((kid) => kid.id === kidId)?.hiddenBadgeIds ?? []);
 
-  return [
+  const rawBadges: Omit<Badge, "revoked">[] = [
     {
       id: "first-paycheck",
       emoji: "🪙",
@@ -122,4 +126,9 @@ export function badgesForKid(state: FamilyBankState, kidId: string): Badge[] {
       ),
     },
   ];
+
+  return rawBadges.map((badge) => {
+    const revoked = badge.earned && hiddenIds.has(badge.id);
+    return { ...badge, earned: badge.earned && !revoked, revoked };
+  });
 }

@@ -440,6 +440,34 @@ export function setKidPin(state: FamilyBankState, kidId: string, pinHash: string
   });
 }
 
+/** Parent-only: hides or restores a badge that was awarded by mistake. Badges are otherwise fully
+ *  recomputed from state, never stored — this just adds/removes one id from a per-kid override list. */
+export function setBadgeHidden(
+  state: FamilyBankState,
+  kidId: string,
+  badgeId: string,
+  badgeTitle: string,
+  hidden: boolean,
+  actor: AuditActor,
+): FamilyBankState {
+  const updated = {
+    ...state,
+    kids: state.kids.map((kid) => {
+      if (kid.id !== kidId) return kid;
+      const hiddenBadgeIds = new Set(kid.hiddenBadgeIds ?? []);
+      if (hidden) hiddenBadgeIds.add(badgeId);
+      else hiddenBadgeIds.delete(badgeId);
+      return { ...kid, hiddenBadgeIds: Array.from(hiddenBadgeIds) };
+    }),
+  };
+  return logAudit(
+    updated,
+    actor,
+    `${hidden ? "Removed" : "Restored"} ${kidName(state, kidId)}'s "${badgeTitle}" badge`,
+    { kidId },
+  );
+}
+
 /** Parent-only: removes a kid and everything tied to them. Irreversible — the UI must confirm. */
 export function removeKid(state: FamilyBankState, kidId: string): FamilyBankState {
   return touch({
