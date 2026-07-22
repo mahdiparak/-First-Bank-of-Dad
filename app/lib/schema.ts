@@ -15,6 +15,8 @@ export interface KidProfile {
   viewMode?: "auto" | "kid" | "teen";
   /** Optional PIN (SHA-256 hash) a kid enters after email login to open their own Kid View. Unset = no PIN needed — fine for a younger kid on a shared/trusted device. */
   pinHash?: string;
+  /** Badge ids a parent has manually hidden (e.g. awarded by a data mistake). Badges are otherwise fully recomputed from state, never stored — this is the one override. */
+  hiddenBadgeIds?: string[];
 }
 
 /** Kids under this age get the simplified, picture-first UI. */
