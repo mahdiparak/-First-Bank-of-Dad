@@ -2,11 +2,14 @@
 
 import { buildMoneyTimeline, type TimelinePoint } from "@/lib/timeline";
 import { totalTaxPaidForKid } from "@/lib/mutations";
-import { kidColor, type FamilyBankState, type KidProfile } from "@/lib/schema";
+import type { FamilyBankState, KidProfile } from "@/lib/schema";
 
 const WIDTH = 340;
 const HEIGHT = 200;
 const MARGIN = { top: 24, right: 12, bottom: 22, left: 44 };
+// Fixed, meaning-coded colors (not the kid's own accent color) so the two lines always read the
+// same way: green + solid = safe/leave it alone, red + dashed = the "spend it" line.
+const KEEP_COLOR = "#22c55e";
 const WITHDRAW_COLOR = "#ef4444";
 
 /**
@@ -33,7 +36,6 @@ export function WithdrawalConfirmDialog({
   const timeline = buildMoneyTimeline(state, kid, { simAmount: amount, simKind: "withdraw" });
   const taxPaid = totalTaxPaidForKid(state, kid.id);
   const balance = timeline.past[timeline.past.length - 1].value;
-  const color = kidColor(kid);
 
   // A short horizon keeps the near-term — the part that actually matters for "should I do this
   // right now" — from getting diluted by unrelated months of allowance growth.
@@ -95,15 +97,28 @@ export function WithdrawalConfirmDialog({
 
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" aria-label="What happens to your money if you take this out">
           <path d={bandPath(future, sim)} fill={WITHDRAW_COLOR} fillOpacity="0.18" stroke="none" />
-          <path d={path(future)} fill="none" stroke={color} strokeWidth="3" strokeDasharray="5 5" />
-          <path d={path(sim)} fill="none" stroke={WITHDRAW_COLOR} strokeWidth="3" strokeDasharray="5 5" />
+          <path d={path(future)} fill="none" stroke={KEEP_COLOR} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d={path(sim)} fill="none" stroke={WITHDRAW_COLOR} strokeWidth="3.5" strokeDasharray="6 5" strokeLinecap="round" />
           {showRecoveryMarker && recoveryAt !== undefined && (
-            <circle cx={x(recoveryAt)} cy={y(balance)} r="4.5" fill="#22c55e" />
+            <circle cx={x(recoveryAt)} cy={y(balance)} r="4.5" fill={KEEP_COLOR} />
           )}
-          <text x={MARGIN.left} y={MARGIN.top - 10} fontSize="11" fontWeight="700" fill={color}>
+          {/* Legend swatches mirror the actual line style (solid vs. dashed), not just color, so
+              the difference reads even without relying on color perception alone. */}
+          <line x1={MARGIN.left} x2={MARGIN.left + 18} y1={MARGIN.top - 15} y2={MARGIN.top - 15} stroke={KEEP_COLOR} strokeWidth="3.5" strokeLinecap="round" />
+          <text x={MARGIN.left + 24} y={MARGIN.top - 10} fontSize="11" fontWeight="700" fill={KEEP_COLOR}>
             ✅ If you leave it
           </text>
-          <text x={MARGIN.left} y={HEIGHT - 4} fontSize="11" fontWeight="700" fill={WITHDRAW_COLOR}>
+          <line
+            x1={MARGIN.left}
+            x2={MARGIN.left + 18}
+            y1={HEIGHT - 9}
+            y2={HEIGHT - 9}
+            stroke={WITHDRAW_COLOR}
+            strokeWidth="3.5"
+            strokeDasharray="6 4"
+            strokeLinecap="round"
+          />
+          <text x={MARGIN.left + 24} y={HEIGHT - 4} fontSize="11" fontWeight="700" fill={WITHDRAW_COLOR}>
             💸 If you take it out
           </text>
         </svg>
