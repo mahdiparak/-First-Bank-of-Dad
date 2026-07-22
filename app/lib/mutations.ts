@@ -382,6 +382,23 @@ export function updateKidProfile(
   });
 }
 
+/** Parent-only: sets, changes, or (passing null) removes a kid's own PIN for opening their Kid View. */
+export function setKidPin(state: FamilyBankState, kidId: string, pinHash: string | null): FamilyBankState {
+  return touch({
+    ...state,
+    kids: state.kids.map((kid) => {
+      if (kid.id !== kidId) return kid;
+      const next = { ...kid };
+      if (pinHash) {
+        next.pinHash = pinHash;
+      } else {
+        delete next.pinHash;
+      }
+      return next;
+    }),
+  });
+}
+
 /** Parent-only: removes a kid and everything tied to them. Irreversible — the UI must confirm. */
 export function removeKid(state: FamilyBankState, kidId: string): FamilyBankState {
   return touch({

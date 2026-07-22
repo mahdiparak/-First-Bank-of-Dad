@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { hashPin } from "@/lib/crypto";
+import { hashKidPin, hashPin } from "@/lib/crypto";
 import {
   addParentProfile,
   removeKid,
   removeParentProfile,
+  setKidPin,
   setParentPinHash,
   setParentProfilePin,
   updateKidAllowance,
@@ -106,7 +107,9 @@ export function ProfileSettingsPanel({
         <p className="text-xs opacity-60">
           A kid only needs an email if they have their own device/login (e.g. an older kid) — it
           lets that device open straight to their view. The younger kid with no device of his own
-          can skip this; a parent opens his profile for him instead.
+          can skip this; a parent opens his profile for him instead. Optionally add a PIN so that
+          kid also has to enter it after email login, like a real bank app — leave it unset for a
+          kid you&apos;re fine letting straight in.
         </p>
         {state.kids.length === 0 && <p className="text-xs opacity-60">No kids yet.</p>}
         {state.kids.map((kid) => (
@@ -322,6 +325,8 @@ function KidProfileEditor({
   const [allowance, setAllowance] = useState(String(kid.weeklyAllowance));
   const [payday, setPayday] = useState(String(kid.paydayWeekday));
   const [error, setError] = useState<string | null>(null);
+  const [pin, setPin] = useState("");
+  const [pinMessage, setPinMessage] = useState<string | null>(null);
 
   function handleSave(event: React.FormEvent) {
     event.preventDefault();
@@ -352,22 +357,61 @@ function KidProfileEditor({
     }
   }
 
+  async function handleSetPin(event: React.FormEvent) {
+    event.preventDefault();
+    if (pin.trim().length < 4) {
+      setPinMessage("Use at least 4 digits.");
+      return;
+    }
+    const hash = await hashKidPin(pin);
+    onMutate((s) => setKidPin(s, kid.id, hash));
+    setPin("");
+    setPinMessage("PIN saved.");
+  }
+
+  function handleRemovePin() {
+    onMutate((s) => setKidPin(s, kid.id, null));
+    setPinMessage("PIN removed — this kid opens straight to their view after email login.");
+  }
+
   if (!editing) {
     return (
-      <div className="flex items-center justify-between text-sm">
-        <span>
-          {kidAvatar(kid)} {kid.name} (age {kid.age}) · {formatCurrency(kid.weeklyAllowance)}/wk on{" "}
-          {WEEKDAYS[kid.paydayWeekday]}
-          {kid.email && <span className="opacity-60"> · {kid.email}</span>}
-        </span>
-        <div className="flex gap-3">
-          <button onClick={() => setEditing(true)} className="text-xs underline opacity-70">
-            Edit
-          </button>
-          <button onClick={handleRemove} className="text-xs text-red-500">
-            Remove
-          </button>
+      <div className="space-y-2 rounded-lg border border-black/10 p-3 dark:border-white/10">
+        <div className="flex items-center justify-between text-sm">
+          <span>
+            {kidAvatar(kid)} {kid.name} (age {kid.age}) · {formatCurrency(kid.weeklyAllowance)}/wk on{" "}
+            {WEEKDAYS[kid.paydayWeekday]}
+            {kid.email && <span className="opacity-60"> · {kid.email}</span>}
+          </span>
+          <div className="flex gap-3">
+            <button onClick={() => setEditing(true)} className="text-xs underline opacity-70">
+              Edit
+            </button>
+            <button onClick={handleRemove} className="text-xs text-red-500">
+              Remove
+            </button>
+          </div>
         </div>
+        <form onSubmit={handleSetPin} className="flex flex-wrap items-center gap-2">
+          <span className="text-xs opacity-60">PIN {kid.pinHash ? "(set)" : "(not set)"}</span>
+          <input
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            type="password"
+            inputMode="numeric"
+            placeholder="New PIN"
+            className={`${inputClass} w-28`}
+          />
+          <button type="submit" className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20">
+            {kid.pinHash ? "Change PIN" : "Set PIN"}
+          </button>
+          {kid.pinHash && (
+            <button type="button" onClick={handleRemovePin} className="text-xs opacity-70 underline">
+              Remove PIN
+            </button>
+          )}
+        </form>
+        {pinMessage && <p className="text-xs opacity-60">{pinMessage}</p>}
       </div>
     );
   }

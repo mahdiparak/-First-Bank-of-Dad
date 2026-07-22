@@ -11,6 +11,8 @@ export interface KidProfile {
   color?: string; // hex accent color
   /** Only set for a kid with their own device/login (e.g. an older kid) — matches Cloudflare Access identity to auto-open their view. */
   email?: string;
+  /** Optional PIN (SHA-256 hash) a kid enters after email login to open their own Kid View. Unset = no PIN needed — fine for a younger kid on a shared/trusted device. */
+  pinHash?: string;
 }
 
 /** Kids under this age get the simplified, picture-first UI. */
