@@ -132,7 +132,9 @@ export interface Bounty {
   icon?: string; // emoji
 }
 
-export const QUEST_ICONS = ["🧹", "🧺", "🍽️", "🐕", "🌱", "🚗", "🛏️", "🧽", "🗑️", "📚", "🎨", "📦", "🪟", "⭐"] as const;
+export const QUEST_ICONS = [
+  "🧹", "🧺", "🍽️", "🐕", "🌱", "🚗", "🛏️", "🧽", "🗑️", "📚", "🎨", "📦", "🪟", "⭐", "🏃", "📵",
+] as const;
 
 export function questIcon(bounty: Bounty): string {
   return bounty.icon ?? QUEST_ICONS[hashIndex(bounty.id, QUEST_ICONS.length)];
