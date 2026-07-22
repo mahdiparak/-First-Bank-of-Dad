@@ -4,7 +4,6 @@ import { useCallback, useMemo, useState } from "react";
 import { daysUntilPayday, paydaysInMonth, streakWeekDate, weeksWithoutWithdrawalFor } from "@/lib/allowance";
 import { estimateGoalSchedule, type GoalSchedule } from "@/lib/goal-schedule";
 import {
-  allocateToGoal,
   availableBalanceForKid,
   claimBounty,
   createGoal,
@@ -628,8 +627,6 @@ function GoalRow({
   const [editingAutoSave, setEditingAutoSave] = useState(false);
   const [autoSaveInput, setAutoSaveInput] = useState(String(goal.weeklyContribution ?? ""));
 
-  const available = availableBalanceForKid(state, kid.id);
-  const step = young ? 1 : 5;
   const progress = Math.min(100, Math.round((goal.savedAmount / goal.targetAmount) * 100));
   const remaining = goal.targetAmount - goal.savedAmount;
   const weeklyContribution = goal.weeklyContribution ?? 0;
@@ -655,34 +652,23 @@ function GoalRow({
         <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${progress}%` }} />
       </div>
 
-      {!goal.completedAt && weeklyContribution > 0 && (
+      {!goal.completedAt && (
         <p className="text-xs opacity-60">
-          🔄 Auto-saving {formatCurrency(weeklyContribution)}/wk
-          {schedule && ` — ~${schedule.weeksToGo} payday${schedule.weeksToGo === 1 ? "" : "s"} to go`}
+          {weeklyContribution > 0
+            ? `🔄 Auto-saving ${formatCurrency(weeklyContribution)}/wk${
+                schedule ? ` — ~${schedule.weeksToGo} payday${schedule.weeksToGo === 1 ? "" : "s"} to go` : ""
+              }`
+            : "No auto-save set — set one up, or save toward this goal next time an envelope arrives."}
         </p>
       )}
 
       {!goal.completedAt && (
         <div className="flex flex-wrap items-center gap-2 pt-0.5">
           <button
-            onClick={() => onMutate((s) => allocateToGoal(s, goal.id, Math.min(step, available)))}
-            className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
-            disabled={available <= 0}
-          >
-            + ${step}
-          </button>
-          <button
-            onClick={() => onMutate((s) => allocateToGoal(s, goal.id, -Math.min(step, goal.savedAmount)))}
-            className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
-            disabled={goal.savedAmount <= 0}
-          >
-            - ${step}
-          </button>
-          <button
             onClick={() => setEditingAutoSave((v) => !v)}
             className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
           >
-            {weeklyContribution > 0 ? "🔄 Edit auto-save" : "🔄 Auto-save"}
+            {weeklyContribution > 0 ? "🔄 Edit auto-save" : "🔄 Set up auto-save"}
           </button>
           {schedule && (
             <button
