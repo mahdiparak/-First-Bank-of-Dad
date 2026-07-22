@@ -3,7 +3,7 @@ import type { FamilyBankState } from "./schema";
 export interface CelebrationEvent {
   id: string;
   kidId: string;
-  kind: "payday" | "interest" | "dad-match" | "bounty" | "goal-complete" | "goal-spent";
+  kind: "payday" | "interest" | "dad-match" | "bounty" | "goal-complete" | "goal-spent" | "envelope-arrived";
   title: string;
   emoji: string;
   amount: number;
@@ -90,6 +90,20 @@ export function diffCelebrations(prev: FamilyBankState | null, next: FamilyBankS
         detail: transaction.memo,
       });
     }
+  }
+
+  const prevEnvelopeIds = new Set(prev.envelopes.map((envelope) => envelope.id));
+  for (const envelope of next.envelopes) {
+    if (prevEnvelopeIds.has(envelope.id)) continue;
+    events.push({
+      id: crypto.randomUUID(),
+      kidId: envelope.kidId,
+      kind: "envelope-arrived",
+      title: "You got an envelope!",
+      emoji: "💌",
+      amount: envelope.amount,
+      detail: envelope.title,
+    });
   }
 
   const prevGoals = new Map(prev.goals.map((goal) => [goal.id, goal]));

@@ -66,6 +66,7 @@ export function ApprovalQueue({
 
       <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
         <p className="text-sm opacity-70">Claimed quests</p>
+        <p className="text-xs opacity-60">Approving sends the reward as an envelope — the kid decides how much goes to a goal vs. their main account.</p>
         {pendingBounties.length === 0 && <p className="text-xs opacity-60">Nothing pending.</p>}
         {pendingBounties.map((bounty) => (
           <div key={bounty.id} className="flex items-center justify-between text-sm">
