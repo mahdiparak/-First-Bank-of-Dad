@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { daysUntilPayday, weeksWithoutWithdrawalFor } from "@/lib/allowance";
+import { useCallback, useMemo, useState } from "react";
+import { daysUntilPayday, paydaysInMonth, streakWeekDate, weeksWithoutWithdrawalFor } from "@/lib/allowance";
 import {
   allocateToGoal,
   availableBalanceForKid,
@@ -22,6 +22,7 @@ import {
   type KidProfile,
 } from "@/lib/schema";
 import { BadgeWall } from "./badge-wall";
+import { MonthCalendar, type CalendarMarker } from "./calendar";
 import { MoneyTimeline } from "./money-timeline";
 import { InvestmentSandbox } from "./investment-sandbox";
 import { QuestBoard, QuestCard } from "./quest-board";
@@ -128,26 +129,29 @@ function HomeTab({
 
   return (
     <div className="space-y-6">
-      {/* The money story is the main screen: everything else hangs off this picture. */}
+      {/* Total balance leads the screen — the number a kid cares about most, before the story of
+          how it got there. */}
+      <div className="rounded-xl border border-black/10 p-4 dark:border-white/10" style={{ borderTopWidth: 4, borderTopColor: color }}>
+        <p className="text-sm opacity-70">Total balance</p>
+        <p className="text-4xl font-semibold tabular-nums">{formatCurrency(total)}</p>
+        {available !== total && (
+          <p className="text-xs opacity-60">
+            {formatCurrency(available)} available (rest saved toward goals or pending approval)
+          </p>
+        )}
+      </div>
+
       <MoneyTimeline state={state} kid={kid} marketData={marketData} />
 
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border border-black/10 p-4 dark:border-white/10" style={{ borderTopWidth: 4, borderTopColor: color }}>
-          <p className="text-sm opacity-70">Total balance</p>
-          <p className="text-3xl font-semibold">{formatCurrency(total)}</p>
-          {available !== total && (
-            <p className="text-xs opacity-60">
-              {formatCurrency(available)} available (rest saved toward goals or pending approval)
-            </p>
-          )}
-        </div>
-        <div className="rounded-xl border border-black/10 p-4 dark:border-white/10">
-          <p className="text-sm opacity-70">Allowance</p>
-          <p className="text-3xl font-semibold">{formatCurrency(kid.weeklyAllowance)}/wk</p>
-          <p className="text-xs opacity-60">{days === 0 ? "Payday today! 🎉" : `Payday in ${days} day${days === 1 ? "" : "s"}`}</p>
-          <p className="text-xs opacity-60">
-            Plus interest every week — your money earns {formatPercent(state.parentSettings.hysaApr)} a year just by sitting here.
-          </p>
+      <section className="rounded-xl border border-black/10 p-4 dark:border-white/10">
+        <p className="text-sm opacity-70">Allowance</p>
+        <p className="text-3xl font-semibold">{formatCurrency(kid.weeklyAllowance)}/wk</p>
+        <p className="text-xs opacity-60">{days === 0 ? "Payday today! 🎉" : `Payday in ${days} day${days === 1 ? "" : "s"}`}</p>
+        <p className="text-xs opacity-60">
+          Plus interest every week — your money earns {formatPercent(state.parentSettings.hysaApr)} a year just by sitting here.
+        </p>
+        <div className="mt-3 border-t border-black/10 pt-3 dark:border-white/10">
+          <PaydayCalendar kid={kid} color={color} />
         </div>
       </section>
 
@@ -165,10 +169,86 @@ function HomeTab({
             {formatCurrency(nextMilestone.bonus)} bonus
           </p>
         )}
+        <div className="mt-3 border-t border-black/10 pt-3 dark:border-white/10">
+          <StreakCalendar state={state} kid={kid} streakWeeks={streakWeeks} nextMilestone={nextMilestone} color={color} />
+        </div>
       </section>
 
       <BadgeWall state={state} kid={kid} />
     </div>
+  );
+}
+
+/** A month calendar marking every payday with 💲 — paydays are a fixed weekday, so this is just
+ *  every date in the displayed month that matches it, past or future. */
+function PaydayCalendar({ kid, color }: { kid: KidProfile; color: string }) {
+  const getMarkers = useCallback(
+    (year: number, month: number): CalendarMarker[] =>
+      paydaysInMonth(kid, year, month).map((date) => ({ date, content: "💲", title: "Payday" })),
+    [kid],
+  );
+
+  return (
+    <MonthCalendar
+      getMarkers={getMarkers}
+      color={color}
+      legend={<span>💲 Payday</span>}
+    />
+  );
+}
+
+/** A month calendar showing the Dad Match streak: each week already banked gets a ✅, and — if
+ *  the streak holds — the date of the next milestone bonus gets a 💲 so a kid can see exactly
+ *  when a broken streak would have cost them a payout. */
+function StreakCalendar({
+  state,
+  kid,
+  streakWeeks,
+  nextMilestone,
+  color,
+}: {
+  state: FamilyBankState;
+  kid: KidProfile;
+  streakWeeks: number;
+  nextMilestone?: { weeks: number; bonus: number };
+  color: string;
+}) {
+  const horizonWeeks = Math.max(streakWeeks, nextMilestone?.weeks ?? streakWeeks);
+
+  const allMarkers = useMemo(() => {
+    const markers: CalendarMarker[] = [];
+    for (let week = 1; week <= horizonWeeks; week++) {
+      const date = streakWeekDate(state, kid.id, week);
+      if (week <= streakWeeks) {
+        markers.push({ date, content: "✅", title: `Week ${week} of your streak` });
+      } else if (nextMilestone && week === nextMilestone.weeks) {
+        markers.push({
+          date,
+          content: "💲",
+          title: `Dad Match bonus day — ${formatCurrency(nextMilestone.bonus)} if the streak holds`,
+        });
+      }
+    }
+    return markers;
+  }, [state, kid.id, streakWeeks, nextMilestone, horizonWeeks]);
+
+  const getMarkers = useCallback(
+    (year: number, month: number): CalendarMarker[] =>
+      allMarkers.filter((marker) => marker.date.getFullYear() === year && marker.date.getMonth() === month),
+    [allMarkers],
+  );
+
+  return (
+    <MonthCalendar
+      getMarkers={getMarkers}
+      color={color}
+      legend={
+        <>
+          <span>✅ Streak week banked</span>
+          {nextMilestone && <span>💲 Bonus payday if it holds</span>}
+        </>
+      }
+    />
   );
 }
 

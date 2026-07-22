@@ -90,11 +90,13 @@ export function MoneyTimeline({
   const hasSim = Boolean(visibleSim && visibleSim.length > 0);
 
   const visiblePoints = [...visiblePast, ...visibleFuture, ...(visibleSim ?? [])];
-  // A withdrawal of $20 on a $600 balance is a rounding error against a $0-based axis spanning
-  // years of history — with a sim active, scale to just the two compared lines so the gap reads.
+  // Zoom the y-axis to whatever's actually on screen rather than pinning the bottom to $0 — a $5
+  // spend is a rounding error against a $0-based axis spanning years of history, but it reads as
+  // a real dip once the axis tracks the balance's own visible range instead of the distance back
+  // to zero. (With a sim active, scale to just the two compared lines so the gap reads clearly.)
   const scalePoints = hasSim ? [...visibleFuture, ...(visibleSim ?? [])] : visiblePoints;
   const dataMax = Math.max(...scalePoints.map((p) => p.value), 1);
-  const dataMin = hasSim ? Math.min(...scalePoints.map((p) => p.value)) : Math.min(0, dataMax);
+  const dataMin = Math.min(...scalePoints.map((p) => p.value), dataMax);
 
   const span = Math.max(dataMax - dataMin, 1);
   const rawStep = span / 4;
@@ -102,7 +104,7 @@ export function MoneyTimeline({
   const normalized = rawStep / magnitude;
   const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
   const yTop = Math.ceil(dataMax / step) * step;
-  const yBottom = hasSim ? Math.floor(dataMin / step) * step : 0;
+  const yBottom = Math.floor(dataMin / step) * step;
 
   const x = (t: number) => MARGIN.left + ((t - tMin) / (tMax - tMin)) * (WIDTH - MARGIN.left - MARGIN.right);
   const y = (v: number) =>
