@@ -88,7 +88,7 @@ export function addKid(
   const withKid = touch({
     ...state,
     kids: [...state.kids, kid],
-    taxPots: [...state.taxPots, { kidId: kid.id, balance: 0, rate: state.parentSettings.taxRate }],
+    taxPots: [...state.taxPots, { kidId: kid.id, balance: 0, rate: state.parentSettings.taxRate, totalPaid: 0 }],
     streaks: [...state.streaks, { kidId: kid.id, weeksWithoutWithdrawal: 0 }],
   });
   if (!startingBalance || startingBalance <= 0) return withKid;
@@ -616,6 +616,11 @@ export function removeCashAdjustment(state: FamilyBankState, adjustmentId: strin
       ),
     },
   });
+}
+
+/** Lifetime Family Tax withheld from this kid's allowance so far — survives tax refunds, unlike the pot balance. */
+export function totalTaxPaidForKid(state: FamilyBankState, kidId: string): number {
+  return state.taxPots.find((pot) => pot.kidId === kidId)?.totalPaid ?? 0;
 }
 
 /** Parent-side: pays out a kid's accumulated Family Tax pot as a reward, then zeroes it out. */

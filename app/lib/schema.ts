@@ -137,6 +137,8 @@ export interface TaxPot {
   kidId: string;
   balance: number;
   rate: number; // e.g. 0.05
+  /** Lifetime total ever withheld into this pot — unlike `balance`, a tax refund never reduces this. */
+  totalPaid: number;
 }
 
 export type AssetClass = "savings" | "cd" | "stocks" | "crypto";
@@ -271,12 +273,14 @@ export function normalizeState(state: FamilyBankState): FamilyBankState {
     parentProfiles?: ParentProfile[];
     reconciliation?: { actualHysaBalances?: KidHysaBalance[]; cashAdjustments?: CashAdjustment[] };
     auditLog?: AuditEntry[];
+    taxPots?: (TaxPot | Omit<TaxPot, "totalPaid">)[];
   };
 
   const needsReconciliationFix = !Array.isArray(legacy.reconciliation?.actualHysaBalances);
   const needsParentProfiles = !Array.isArray(legacy.parentProfiles);
   const needsAuditLog = !Array.isArray(legacy.auditLog);
-  if (!needsReconciliationFix && !needsParentProfiles && !needsAuditLog) return state;
+  const needsTaxPotTotals = (legacy.taxPots ?? []).some((pot) => typeof (pot as TaxPot).totalPaid !== "number");
+  if (!needsReconciliationFix && !needsParentProfiles && !needsAuditLog && !needsTaxPotTotals) return state;
 
   return {
     ...state,
@@ -285,6 +289,11 @@ export function normalizeState(state: FamilyBankState): FamilyBankState {
       ? { actualHysaBalances: [], cashAdjustments: legacy.reconciliation?.cashAdjustments ?? [] }
       : state.reconciliation,
     auditLog: needsAuditLog ? [] : state.auditLog,
+    // Pre-existing installs have no record of tax withheld before this field existed — the
+    // current pot balance (what hasn't been refunded yet) is the best floor we can backfill.
+    taxPots: needsTaxPotTotals
+      ? state.taxPots.map((pot) => ({ ...pot, totalPaid: typeof pot.totalPaid === "number" ? pot.totalPaid : pot.balance }))
+      : state.taxPots,
   };
 }
 

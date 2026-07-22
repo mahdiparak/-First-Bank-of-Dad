@@ -47,7 +47,9 @@ function processAllowanceForKid(state: FamilyBankState, kid: KidProfile, now: Da
     working = {
       ...working,
       taxPots: working.taxPots.map((pot) =>
-        pot.kidId === kid.id ? { ...pot, balance: round2(pot.balance + taxAmount) } : pot,
+        pot.kidId === kid.id
+          ? { ...pot, balance: round2(pot.balance + taxAmount), totalPaid: round2(pot.totalPaid + taxAmount) }
+          : pot,
       ),
       kids: working.kids.map((candidate) =>
         candidate.id === kid.id ? { ...candidate, lastAllowancePaidAt: paidAt } : candidate,

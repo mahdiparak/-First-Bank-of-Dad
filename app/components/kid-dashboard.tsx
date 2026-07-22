@@ -25,6 +25,7 @@ import { BadgeWall } from "./badge-wall";
 import { MoneyTimeline } from "./money-timeline";
 import { InvestmentSandbox } from "./investment-sandbox";
 import { QuestBoard, QuestCard } from "./quest-board";
+import { WithdrawalPreview } from "./withdrawal-preview";
 import type { MarketDataResponse } from "@/lib/market-data";
 
 type KidTab = "home" | "goals" | "invest" | "quests" | "ledger";
@@ -237,7 +238,7 @@ function YoungKidHome({
         </section>
       )}
 
-      <YoungSpendForm kid={kid} available={available} onMutate={onMutate} />
+      <YoungSpendForm state={state} kid={kid} available={available} onMutate={onMutate} />
 
       {recent.length > 0 && (
         <section className="space-y-2 rounded-3xl border border-black/10 p-5 dark:border-white/10">
@@ -285,10 +286,12 @@ function CoinPile({ balance }: { balance: number }) {
 }
 
 function YoungSpendForm({
+  state,
   kid,
   available,
   onMutate,
 }: {
+  state: FamilyBankState;
   kid: KidProfile;
   available: number;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
@@ -341,6 +344,7 @@ function YoungSpendForm({
           Ask Dad
         </button>
       </form>
+      <WithdrawalPreview state={state} kid={kid} amount={Number(amount) || 0} young />
       {asked && <p className="text-sm text-green-600">Sent! Dad will say yes or no. 🕐</p>}
     </section>
   );
@@ -567,6 +571,7 @@ function Ledger({
         </button>
       </form>
       <p className="text-xs opacity-60">Sends a request to Dad — the money leaves your balance once approved.</p>
+      <WithdrawalPreview state={state} kid={kid} amount={Number(amount) || 0} />
 
       <div className="divide-y divide-black/10 dark:divide-white/10">
         {rows.length === 0 && <p className="py-2 text-sm opacity-70">No transactions yet.</p>}
