@@ -14,9 +14,9 @@ import {
   totalBalanceForKid,
 } from "@/lib/mutations";
 import {
+  isYoungKidView,
   kidColor,
   SPENDING_CATEGORIES,
-  YOUNG_KID_MAX_AGE,
   type AuditActor,
   type FamilyBankState,
   type KidProfile,
@@ -26,6 +26,7 @@ import { MoneyTimeline } from "./money-timeline";
 import { InvestmentSandbox } from "./investment-sandbox";
 import { QuestBoard, QuestCard } from "./quest-board";
 import { WithdrawalPreview } from "./withdrawal-preview";
+import { WithdrawalConfirmDialog } from "./withdrawal-confirm";
 import type { MarketDataResponse } from "@/lib/market-data";
 
 type KidTab = "home" | "goals" | "invest" | "quests" | "ledger";
@@ -57,7 +58,7 @@ export function KidDashboard({
     }
   }
 
-  if (kid.age <= YOUNG_KID_MAX_AGE) {
+  if (isYoungKidView(kid)) {
     return (
       <div className="space-y-6">
         {error && <p className="text-sm text-red-500">{error}</p>}
@@ -299,13 +300,19 @@ function YoungSpendForm({
   const [category, setCategory] = useState<string>(SPENDING_CATEGORIES[0].emoji);
   const [amount, setAmount] = useState("");
   const [asked, setAsked] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   function handleAsk(event: React.FormEvent) {
     event.preventDefault();
     if (!amount) return;
+    setConfirming(true);
+  }
+
+  function handleConfirm() {
     onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category));
     setAmount("");
     setAsked(true);
+    setConfirming(false);
   }
 
   return (
@@ -346,6 +353,16 @@ function YoungSpendForm({
       </form>
       <WithdrawalPreview state={state} kid={kid} amount={Number(amount) || 0} young />
       {asked && <p className="text-sm text-green-600">Sent! Dad will say yes or no. 🕐</p>}
+      {confirming && (
+        <WithdrawalConfirmDialog
+          state={state}
+          kid={kid}
+          amount={Number(amount) || 0}
+          onConfirm={handleConfirm}
+          onCancel={() => setConfirming(false)}
+          young
+        />
+      )}
     </section>
   );
 }
@@ -507,6 +524,7 @@ function Ledger({
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<string>(SPENDING_CATEGORIES[0].emoji);
   const [memo, setMemo] = useState("");
+  const [confirming, setConfirming] = useState(false);
 
   const available = availableBalanceForKid(state, kid.id);
   const transactions = state.transactions.filter((transaction) => transaction.kidId === kid.id);
@@ -515,9 +533,14 @@ function Ledger({
   function handleRequest(event: React.FormEvent) {
     event.preventDefault();
     if (!amount) return;
-    onMutate((state) => requestWithdrawal(state, kid.id, Number(amount), category, memo.trim() || undefined));
+    setConfirming(true);
+  }
+
+  function handleConfirm() {
+    onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category, memo.trim() || undefined));
     setAmount("");
     setMemo("");
+    setConfirming(false);
   }
 
   type Row =
@@ -612,6 +635,16 @@ function Ledger({
           ),
         )}
       </div>
+
+      {confirming && (
+        <WithdrawalConfirmDialog
+          state={state}
+          kid={kid}
+          amount={Number(amount) || 0}
+          onConfirm={handleConfirm}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
     </section>
   );
 }

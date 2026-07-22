@@ -11,10 +11,19 @@ export interface KidProfile {
   color?: string; // hex accent color
   /** Only set for a kid with their own device/login (e.g. an older kid) — matches Cloudflare Access identity to auto-open their view. */
   email?: string;
+  /** Overrides the age-based UI choice. "auto" (or unset) picks by age against YOUNG_KID_MAX_AGE. */
+  viewMode?: "auto" | "kid" | "teen";
 }
 
 /** Kids under this age get the simplified, picture-first UI. */
 export const YOUNG_KID_MAX_AGE = 7;
+
+/** Whether this kid should see the big, simplified single-screen UI rather than the full tabbed dashboard. */
+export function isYoungKidView(kid: KidProfile): boolean {
+  if (kid.viewMode === "kid") return true;
+  if (kid.viewMode === "teen") return false;
+  return kid.age <= YOUNG_KID_MAX_AGE;
+}
 
 export const KID_AVATARS = ["🦁", "🐯", "🦊", "🐼", "🐸", "🦄", "🐙", "🦖"] as const;
 export const KID_COLORS = ["#f59e0b", "#10b981", "#3b82f6", "#ec4899", "#8b5cf6", "#ef4444", "#14b8a6", "#f97316"] as const;

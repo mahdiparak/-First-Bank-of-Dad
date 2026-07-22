@@ -321,6 +321,7 @@ function KidProfileEditor({
   const [age, setAge] = useState(String(kid.age));
   const [allowance, setAllowance] = useState(String(kid.weeklyAllowance));
   const [payday, setPayday] = useState(String(kid.paydayWeekday));
+  const [viewMode, setViewMode] = useState<NonNullable<KidProfile["viewMode"]>>(kid.viewMode ?? "auto");
   const [error, setError] = useState<string | null>(null);
 
   function handleSave(event: React.FormEvent) {
@@ -330,7 +331,13 @@ function KidProfileEditor({
       setError(null);
       onMutate((s) =>
         updateKidAllowance(
-          updateKidProfile(s, kid.id, { name: name.trim(), avatar, email: email.trim(), age: Number(age) || kid.age }),
+          updateKidProfile(s, kid.id, {
+            name: name.trim(),
+            avatar,
+            email: email.trim(),
+            age: Number(age) || kid.age,
+            viewMode,
+          }),
           kid.id,
           Number(allowance),
           Number(payday),
@@ -359,6 +366,7 @@ function KidProfileEditor({
           {kidAvatar(kid)} {kid.name} (age {kid.age}) · {formatCurrency(kid.weeklyAllowance)}/wk on{" "}
           {WEEKDAYS[kid.paydayWeekday]}
           {kid.email && <span className="opacity-60"> · {kid.email}</span>}
+          <span className="opacity-60"> · {viewModeLabel(kid.viewMode ?? "auto")}</span>
         </span>
         <div className="flex gap-3">
           <button onClick={() => setEditing(true)} className="text-xs underline opacity-70">
@@ -421,6 +429,18 @@ function KidProfileEditor({
             ))}
           </select>
         </label>
+        <label className="flex flex-col gap-1 text-xs opacity-70">
+          View
+          <select
+            value={viewMode}
+            onChange={(e) => setViewMode(e.target.value as NonNullable<KidProfile["viewMode"]>)}
+            className={inputClass}
+          >
+            <option value="auto">Auto (by age)</option>
+            <option value="kid">Kid view — big & simple</option>
+            <option value="teen">Teen view — full dashboard</option>
+          </select>
+        </label>
       </div>
       <div className="flex gap-2">
         <input
@@ -446,4 +466,10 @@ function KidProfileEditor({
 
 function formatCurrency(amount: number): string {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+function viewModeLabel(viewMode: NonNullable<KidProfile["viewMode"]>): string {
+  if (viewMode === "kid") return "Kid view";
+  if (viewMode === "teen") return "Teen view";
+  return "Auto view (by age)";
 }

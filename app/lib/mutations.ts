@@ -374,7 +374,7 @@ export function setParentProfilePin(state: FamilyBankState, parentId: string, pi
 export function updateKidProfile(
   state: FamilyBankState,
   kidId: string,
-  patch: { name?: string; avatar?: string; color?: string; age?: number; email?: string },
+  patch: { name?: string; avatar?: string; color?: string; age?: number; email?: string; viewMode?: KidProfile["viewMode"] },
 ): FamilyBankState {
   return touch({
     ...state,
