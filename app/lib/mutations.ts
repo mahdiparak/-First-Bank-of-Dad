@@ -34,8 +34,16 @@ function kidName(state: FamilyBankState, kidId: string): string {
   return state.kids.find((kid) => kid.id === kidId)?.name ?? "this kid";
 }
 
+function goalName(state: FamilyBankState, goalId: string): string {
+  return state.goals.find((goal) => goal.id === goalId)?.name ?? "a goal";
+}
+
 function formatCurrency(amount: number): string {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 export function totalBalanceForKid(state: FamilyBankState, kidId: string): number {
@@ -258,8 +266,10 @@ export function createGoal(
   name: string,
   targetAmount: number,
   actor: AuditActor,
+  weeklyContribution = 0,
 ): FamilyBankState {
   if (targetAmount <= 0) throw new Error("Goal target must be positive.");
+  if (weeklyContribution < 0) throw new Error("Weekly savings amount can't be negative.");
   const goalId = crypto.randomUUID();
   const withGoal = touch({
     ...state,
@@ -272,17 +282,49 @@ export function createGoal(
         targetAmount,
         savedAmount: 0,
         createdAt: new Date().toISOString(),
+        weeklyContribution: weeklyContribution > 0 ? weeklyContribution : undefined,
       },
     ],
   });
-  return logAudit(withGoal, actor, `Created goal "${name}" (${formatCurrency(targetAmount)} target) for ${kidName(state, kidId)}`, {
-    kidId,
-    undo: { kind: "delete-goal", goalId },
+  const autoSaveNote = weeklyContribution > 0 ? `, auto-saving ${formatCurrency(weeklyContribution)}/wk` : "";
+  return logAudit(
+    withGoal,
+    actor,
+    `Created goal "${name}" (${formatCurrency(targetAmount)} target) for ${kidName(state, kidId)}${autoSaveNote}`,
+    { kidId, undo: { kind: "delete-goal", goalId } },
+  );
+}
+
+/** Kid/parent-side: sets (or clears, with 0) how much allowance auto-saves toward this goal each payday. */
+export function setGoalWeeklyContribution(
+  state: FamilyBankState,
+  goalId: string,
+  weeklyContribution: number,
+): FamilyBankState {
+  if (weeklyContribution < 0) throw new Error("Weekly savings amount can't be negative.");
+  const goal = state.goals.find((candidate) => candidate.id === goalId);
+  if (!goal) throw new Error("Goal not found.");
+  return touch({
+    ...state,
+    goals: state.goals.map((candidate) =>
+      candidate.id === goalId
+        ? { ...candidate, weeklyContribution: weeklyContribution > 0 ? weeklyContribution : undefined }
+        : candidate,
+    ),
   });
 }
 
-/** Moves money between "available" and a goal's earmark. Positive delta = save toward the goal. */
-export function allocateToGoal(state: FamilyBankState, goalId: string, delta: number): FamilyBankState {
+/**
+ * Moves money between "available" and a goal's earmark. Positive delta = save toward the goal.
+ * `at` lets a caller backdate `completedAt` (e.g. allowance catch-up crediting a past payday)
+ * instead of stamping it with the moment this function happens to run.
+ */
+export function allocateToGoal(
+  state: FamilyBankState,
+  goalId: string,
+  delta: number,
+  at: string = new Date().toISOString(),
+): FamilyBankState {
   const goal = state.goals.find((candidate) => candidate.id === goalId);
   if (!goal) throw new Error("Goal not found.");
 
@@ -293,7 +335,6 @@ export function allocateToGoal(state: FamilyBankState, goalId: string, delta: nu
     throw new Error("Can't take out more than what's saved.");
   }
 
-  const now = new Date().toISOString();
   return touch({
     ...state,
     goals: state.goals.map((candidate) =>
@@ -302,7 +343,7 @@ export function allocateToGoal(state: FamilyBankState, goalId: string, delta: nu
             ...candidate,
             savedAmount: candidate.savedAmount + delta,
             completedAt:
-              candidate.savedAmount + delta >= candidate.targetAmount ? now : candidate.completedAt,
+              candidate.savedAmount + delta >= candidate.targetAmount ? at : candidate.completedAt,
           }
         : candidate,
     ),
@@ -406,6 +447,7 @@ export function removeKid(state: FamilyBankState, kidId: string): FamilyBankStat
     kids: state.kids.filter((kid) => kid.id !== kidId),
     transactions: state.transactions.filter((transaction) => transaction.kidId !== kidId),
     goals: state.goals.filter((goal) => goal.kidId !== kidId),
+    envelopes: state.envelopes.filter((envelope) => envelope.kidId !== kidId),
     streaks: state.streaks.filter((streak) => streak.kidId !== kidId),
     taxPots: state.taxPots.filter((pot) => pot.kidId !== kidId),
     investments: state.investments.filter((position) => position.kidId !== kidId),
@@ -493,7 +535,11 @@ export function claimBounty(state: FamilyBankState, bountyId: string, kidId: str
   });
 }
 
-/** Parent-side: approves a claimed bounty, which pays out the reward to the kid who claimed it. */
+/**
+ * Parent-side: approves a claimed bounty. The reward doesn't land in the kid's balance yet — it
+ * becomes an envelope the kid has to open and split between their goals and their main account,
+ * so the "how much toward savings" decision is the kid's to make.
+ */
 export function approveBounty(state: FamilyBankState, bountyId: string, actor: AuditActor): FamilyBankState {
   const bounty = state.bounties.find((candidate) => candidate.id === bountyId);
   if (!bounty || bounty.status !== "pending-approval" || !bounty.claimedByKidId) {
@@ -501,21 +547,74 @@ export function approveBounty(state: FamilyBankState, bountyId: string, actor: A
   }
 
   const now = new Date().toISOString();
-  const withPayout = recordTransaction(state, bounty.claimedByKidId, bounty.reward, "💪", "bounty", bounty.title);
-  const transactionId = withPayout.transactions[withPayout.transactions.length - 1].id;
-
-  const approved: FamilyBankState = {
-    ...withPayout,
-    bounties: withPayout.bounties.map((candidate) =>
+  const envelopeId = crypto.randomUUID();
+  const approved: FamilyBankState = touch({
+    ...state,
+    bounties: state.bounties.map((candidate) =>
       candidate.id === bountyId ? { ...candidate, status: "approved", resolvedAt: now } : candidate,
     ),
-  };
+    envelopes: [
+      ...state.envelopes,
+      { id: envelopeId, kidId: bounty.claimedByKidId, amount: bounty.reward, title: bounty.title, bountyId, createdAt: now },
+    ],
+  });
   return logAudit(
     approved,
     actor,
-    `Approved bounty "${bounty.title}" for ${kidName(state, bounty.claimedByKidId)} (${formatCurrency(bounty.reward)})`,
-    { kidId: bounty.claimedByKidId, undo: { kind: "revert-bounty-approval", bountyId, transactionId } },
+    `Approved bounty "${bounty.title}" for ${kidName(state, bounty.claimedByKidId)} — sent as a ${formatCurrency(bounty.reward)} envelope`,
+    { kidId: bounty.claimedByKidId, undo: { kind: "revert-bounty-envelope", bountyId, envelopeId } },
   );
+}
+
+/**
+ * Kid-side: opens an earned envelope, splitting it between chosen goals and their main account.
+ * `goalAllocations` amounts must not add up to more than the envelope — whatever's left over
+ * goes straight to the main balance.
+ */
+export function resolveEnvelope(
+  state: FamilyBankState,
+  envelopeId: string,
+  goalAllocations: { goalId: string; amount: number }[],
+  actor: AuditActor,
+): FamilyBankState {
+  const envelope = state.envelopes.find((candidate) => candidate.id === envelopeId);
+  if (!envelope || envelope.openedAt) throw new Error("This envelope is already open.");
+
+  const allocations = goalAllocations.filter((allocation) => allocation.amount > 0);
+  const totalToGoals = round2(allocations.reduce((total, allocation) => total + allocation.amount, 0));
+  if (totalToGoals > envelope.amount) throw new Error("That's more than what's in the envelope.");
+
+  for (const allocation of allocations) {
+    const goal = state.goals.find((candidate) => candidate.id === allocation.goalId);
+    if (!goal || goal.kidId !== envelope.kidId) throw new Error("Goal not found.");
+    if (goal.completedAt) throw new Error(`"${goal.name}" is already full.`);
+  }
+
+  const now = new Date().toISOString();
+  const withDeposit = recordTransaction(state, envelope.kidId, envelope.amount, "💌", "bounty", envelope.title, now);
+  const transactionId = withDeposit.transactions[withDeposit.transactions.length - 1].id;
+
+  let working = touch({
+    ...withDeposit,
+    envelopes: withDeposit.envelopes.map((candidate) =>
+      candidate.id === envelopeId ? { ...candidate, openedAt: now } : candidate,
+    ),
+  });
+  for (const allocation of allocations) {
+    working = allocateToGoal(working, allocation.goalId, allocation.amount, now);
+  }
+
+  const mainAmount = round2(envelope.amount - totalToGoals);
+  const summary = allocations.length
+    ? `Opened envelope: ${formatCurrency(envelope.amount)} — ${allocations
+        .map((allocation) => `${formatCurrency(allocation.amount)} to "${goalName(state, allocation.goalId)}"`)
+        .join(", ")}, ${formatCurrency(mainAmount)} to main account`
+    : `Opened envelope: ${formatCurrency(envelope.amount)} deposited to main account`;
+
+  return logAudit(working, actor, summary, {
+    kidId: envelope.kidId,
+    undo: { kind: "revert-envelope-open", envelopeId, transactionId, goalAllocations: allocations },
+  });
 }
 
 /** Parent-side: denies a claim and reopens the bounty for anyone to try again. */
@@ -836,6 +935,40 @@ export function undoAuditEntry(state: FamilyBankState, entryId: string): FamilyB
         bounties: withoutTransaction.bounties.map((candidate) =>
           candidate.id === undo.bountyId ? { ...candidate, status: "pending-approval", resolvedAt: undefined } : candidate,
         ),
+      });
+      break;
+    }
+    case "revert-bounty-envelope": {
+      const bounty = state.bounties.find((candidate) => candidate.id === undo.bountyId);
+      if (!bounty || bounty.status !== "approved") throw new Error("This bounty has already moved on.");
+      const envelope = state.envelopes.find((candidate) => candidate.id === undo.envelopeId);
+      if (envelope?.openedAt) throw new Error("The kid already opened this envelope.");
+      reverted = touch({
+        ...state,
+        bounties: state.bounties.map((candidate) =>
+          candidate.id === undo.bountyId ? { ...candidate, status: "pending-approval", resolvedAt: undefined } : candidate,
+        ),
+        envelopes: state.envelopes.filter((candidate) => candidate.id !== undo.envelopeId),
+      });
+      break;
+    }
+    case "revert-envelope-open": {
+      const withoutTransaction = removeTransaction(state, undo.transactionId);
+      reverted = touch({
+        ...withoutTransaction,
+        envelopes: withoutTransaction.envelopes.map((candidate) =>
+          candidate.id === undo.envelopeId ? { ...candidate, openedAt: undefined } : candidate,
+        ),
+        goals: withoutTransaction.goals.map((goal) => {
+          const allocation = undo.goalAllocations.find((candidate) => candidate.goalId === goal.id);
+          if (!allocation) return goal;
+          const savedAmount = Math.max(0, round2(goal.savedAmount - allocation.amount));
+          return {
+            ...goal,
+            savedAmount,
+            completedAt: savedAmount >= goal.targetAmount ? goal.completedAt : undefined,
+          };
+        }),
       });
       break;
     }

@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { daysUntilPayday, paydaysInMonth, streakWeekDate, weeksWithoutWithdrawalFor } from "@/lib/allowance";
+import { estimateGoalSchedule, type GoalSchedule } from "@/lib/goal-schedule";
 import {
   allocateToGoal,
   availableBalanceForKid,
@@ -11,6 +12,7 @@ import {
   removeTransaction,
   requestGoalSpend,
   requestWithdrawal,
+  setGoalWeeklyContribution,
   totalBalanceForKid,
 } from "@/lib/mutations";
 import {
@@ -20,9 +22,11 @@ import {
   type AuditActor,
   type FamilyBankState,
   type KidProfile,
+  type SavingsGoal,
 } from "@/lib/schema";
 import { BadgeWall } from "./badge-wall";
 import { MonthCalendar, type CalendarMarker } from "./calendar";
+import { EnvelopeInbox } from "./envelope-inbox";
 import { MoneyTimeline } from "./money-timeline";
 import { InvestmentSandbox } from "./investment-sandbox";
 import { QuestBoard, QuestCard } from "./quest-board";
@@ -96,7 +100,9 @@ export function KidDashboard({
 
       {error && <p className="text-sm text-red-500">{error}</p>}
 
-      {tab === "home" && <HomeTab state={state} kid={kid} marketData={marketData} />}
+      {tab === "home" && (
+        <HomeTab state={state} kid={kid} role={role} marketData={marketData} actor={actor} onMutate={tryMutate} />
+      )}
       {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} actor={actor} onMutate={tryMutate} />}
       {tab === "invest" && (
         <InvestmentSandbox state={state} kid={kid} marketData={marketData} actor={actor} onMutate={tryMutate} />
@@ -112,11 +118,17 @@ export function KidDashboard({
 function HomeTab({
   state,
   kid,
+  role,
   marketData,
+  actor,
+  onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
+  role: "parent" | "kid";
   marketData: MarketDataResponse | null;
+  actor: AuditActor;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const total = totalBalanceForKid(state, kid.id);
   const available = availableBalanceForKid(state, kid.id);
@@ -129,6 +141,8 @@ function HomeTab({
 
   return (
     <div className="space-y-6">
+      {role === "kid" && <EnvelopeInbox state={state} kid={kid} actor={actor} onMutate={onMutate} />}
+
       {/* Total balance leads the screen — the number a kid cares about most, before the story of
           how it got there. */}
       <div className="rounded-xl border border-black/10 p-4 dark:border-white/10" style={{ borderTopWidth: 4, borderTopColor: color }}>
@@ -141,6 +155,7 @@ function HomeTab({
         )}
       </div>
 
+      {/* The money story is the main screen: everything else hangs off this picture. */}
       <MoneyTimeline state={state} kid={kid} marketData={marketData} />
 
       <section className="rounded-xl border border-black/10 p-4 dark:border-white/10">
@@ -281,6 +296,8 @@ function YoungKidHome({
 
   return (
     <div className="space-y-6">
+      {role === "kid" && <EnvelopeInbox state={state} kid={kid} actor={actor} onMutate={onMutate} young />}
+
       <section
         className="rounded-3xl border-4 p-6 text-center"
         style={{ borderColor: color, backgroundColor: `${color}14` }}
@@ -447,6 +464,43 @@ function YoungSpendForm({
   );
 }
 
+/** A month calendar showing a goal's auto-save schedule: each contributing payday gets a 💰, and
+ *  the date the goal's expected to be full gets a 🎯. */
+function GoalCalendar({ schedule, color }: { schedule: GoalSchedule; color: string }) {
+  const completionTime = schedule.completionDate.getTime();
+  const getMarkers = useCallback(
+    (year: number, month: number): CalendarMarker[] =>
+      schedule.paydays
+        .filter((date) => date.getFullYear() === year && date.getMonth() === month)
+        .map((date) =>
+          date.getTime() === completionTime
+            ? { date, content: "🎯", title: "Goal day!" }
+            : { date, content: "💰", title: "Auto-save payday" },
+        ),
+    [schedule, completionTime],
+  );
+
+  return (
+    <div className="space-y-1">
+      <MonthCalendar
+        getMarkers={getMarkers}
+        initialMonth={schedule.completionDate}
+        color={color}
+        legend={
+          <>
+            <span>💰 Auto-save payday</span>
+            <span>🎯 Goal day!</span>
+          </>
+        }
+      />
+      <p className="text-center text-xs opacity-70">
+        🎯 {schedule.completionDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })} — about{" "}
+        {schedule.weeksToGo} payday{schedule.weeksToGo === 1 ? "" : "s"} from now
+      </p>
+    </div>
+  );
+}
+
 function GoalGetter({
   state,
   kid,
@@ -464,17 +518,20 @@ function GoalGetter({
 }) {
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
-  const available = availableBalanceForKid(state, kid.id);
+  const [weeklyContribution, setWeeklyContribution] = useState("");
   const goals = state.goals.filter((goal) => goal.kidId === kid.id && !goal.spentAt);
-  const step = young ? 1 : 5;
-  const netWeekly = kid.weeklyAllowance * (1 - state.parentSettings.taxRate);
+  const netWeekly = round2(kid.weeklyAllowance * (1 - state.parentSettings.taxRate));
+  const contributionValue = Math.min(Number(weeklyContribution) || 0, netWeekly);
+  const draftSchedule =
+    Number(target) > 0 && contributionValue > 0 ? estimateGoalSchedule(kid, Number(target), contributionValue) : null;
 
   function handleCreate(event: React.FormEvent) {
     event.preventDefault();
     if (!name.trim() || !target) return;
-    onMutate((s) => createGoal(s, kid.id, name.trim(), Number(target), actor));
+    onMutate((s) => createGoal(s, kid.id, name.trim(), Number(target), actor, contributionValue));
     setName("");
     setTarget("");
+    setWeeklyContribution("");
   }
 
   return (
@@ -484,80 +541,63 @@ function GoalGetter({
       {goals.length === 0 && <p className="text-sm opacity-70">No goals yet — start saving for something!</p>}
 
       <div className="space-y-4">
-        {goals.map((goal) => {
-          const progress = Math.min(100, Math.round((goal.savedAmount / goal.targetAmount) * 100));
-          const remaining = goal.targetAmount - goal.savedAmount;
-          const etaWeeks = !goal.completedAt && netWeekly > 0 ? Math.ceil(remaining / netWeekly) : null;
-          const pendingSpend = state.withdrawalRequests.some(
-            (request) => request.goalId === goal.id && request.status === "pending",
-          );
-          return (
-            <div key={goal.id} className="space-y-1">
-              <div className="flex items-center justify-between text-sm">
-                <span className={young ? "text-base" : ""}>{goal.name}</span>
-                <span className="opacity-70">
-                  {formatCurrency(goal.savedAmount)} / {formatCurrency(goal.targetAmount)}
-                </span>
-              </div>
-              <div className={`w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10 ${young ? "h-4" : "h-2"}`}>
-                <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${progress}%` }} />
-              </div>
-              {etaWeeks !== null && etaWeeks > 0 && (
-                <p className="text-xs opacity-60">
-                  ~{etaWeeks} week{etaWeeks === 1 ? "" : "s"} to go at allowance pace
-                </p>
-              )}
-              <div className="flex items-center gap-2">
-                {!goal.completedAt && (
-                  <>
-                    <button
-                      onClick={() => onMutate((s) => allocateToGoal(s, goal.id, Math.min(step, available)))}
-                      className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
-                      disabled={available <= 0}
-                    >
-                      + ${step}
-                    </button>
-                    <button
-                      onClick={() => onMutate((s) => allocateToGoal(s, goal.id, -Math.min(step, goal.savedAmount)))}
-                      className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
-                      disabled={goal.savedAmount <= 0}
-                    >
-                      - ${step}
-                    </button>
-                  </>
-                )}
-                {goal.completedAt && pendingSpend && <span className="text-xs opacity-70">Asked Dad — waiting 🕐</span>}
-                {goal.completedAt && !pendingSpend && (
-                  <button
-                    onClick={() => onMutate((s) => requestGoalSpend(s, goal.id))}
-                    className={`rounded-md bg-green-600 text-white ${young ? "px-4 py-2 text-base" : "px-3 py-1 text-xs"}`}
-                  >
-                    Spend it! 🎉
-                  </button>
-                )}
-                {role === "parent" && !goal.completedAt && <DeleteGoalButton goalId={goal.id} onMutate={onMutate} />}
-              </div>
-            </div>
-          );
-        })}
+        {goals.map((goal) => (
+          <GoalRow key={goal.id} state={state} goal={goal} kid={kid} role={role} young={young} onMutate={onMutate} />
+        ))}
       </div>
 
-      <form onSubmit={handleCreate} className="flex flex-wrap gap-2 pt-2">
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="What are you saving for?"
-          className={`rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent ${young ? "rounded-2xl py-3 text-base" : ""}`}
-        />
-        <input
-          value={target}
-          onChange={(event) => setTarget(event.target.value)}
-          type="number"
-          min={1}
-          step="0.01"
-          placeholder="Target ($)"
-          className={`w-32 rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent ${young ? "rounded-2xl py-3 text-base" : ""}`}
-        />
+      <form onSubmit={handleCreate} className="space-y-3 pt-2">
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="What are you saving for?"
+            className={`rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent ${young ? "rounded-2xl py-3 text-base" : ""}`}
+          />
+          <input
+            value={target}
+            onChange={(event) => setTarget(event.target.value)}
+            type="number"
+            min={1}
+            step="0.01"
+            placeholder="Target ($)"
+            className={`w-32 rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent ${young ? "rounded-2xl py-3 text-base" : ""}`}
+          />
+        </div>
+
+        {netWeekly > 0 && (
+          <div className="space-y-1">
+            <label className={young ? "text-sm" : "text-xs opacity-70"}>Save from allowance each week (optional)</label>
+            <input
+              type="range"
+              min={0}
+              max={netWeekly}
+              step={0.5}
+              value={contributionValue}
+              onChange={(event) => setWeeklyContribution(event.target.value)}
+              className="w-full"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {[0.25, 0.5, 0.75, 1].map((fraction) => (
+                <button
+                  type="button"
+                  key={fraction}
+                  onClick={() => setWeeklyContribution(String(round2(netWeekly * fraction)))}
+                  className={`rounded-full border border-black/20 px-2 py-1 text-xs dark:border-white/20 ${young ? "px-3 py-1.5 text-sm" : ""}`}
+                >
+                  {Math.round(fraction * 100)}%
+                </button>
+              ))}
+              <span className={`opacity-70 ${young ? "text-sm" : "text-xs"}`}>
+                {formatCurrency(contributionValue)}/wk
+                {contributionValue > 0 && ` (${Math.round((contributionValue / netWeekly) * 100)}% of allowance)`}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {draftSchedule && <GoalCalendar schedule={draftSchedule} color={kidColor(kid)} />}
+
         <button
           type="submit"
           className={`rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black ${young ? "rounded-2xl py-3 text-base" : ""}`}
@@ -566,6 +606,128 @@ function GoalGetter({
         </button>
       </form>
     </section>
+  );
+}
+
+function GoalRow({
+  state,
+  goal,
+  kid,
+  role,
+  young,
+  onMutate,
+}: {
+  state: FamilyBankState;
+  goal: SavingsGoal;
+  kid: KidProfile;
+  role: "parent" | "kid";
+  young: boolean;
+  onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
+}) {
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [editingAutoSave, setEditingAutoSave] = useState(false);
+  const [autoSaveInput, setAutoSaveInput] = useState(String(goal.weeklyContribution ?? ""));
+
+  const available = availableBalanceForKid(state, kid.id);
+  const step = young ? 1 : 5;
+  const progress = Math.min(100, Math.round((goal.savedAmount / goal.targetAmount) * 100));
+  const remaining = goal.targetAmount - goal.savedAmount;
+  const weeklyContribution = goal.weeklyContribution ?? 0;
+  const schedule = !goal.completedAt ? estimateGoalSchedule(kid, remaining, weeklyContribution) : null;
+  const pendingSpend = state.withdrawalRequests.some(
+    (request) => request.goalId === goal.id && request.status === "pending",
+  );
+
+  function saveAutoSave() {
+    onMutate((s) => setGoalWeeklyContribution(s, goal.id, Number(autoSaveInput) || 0));
+    setEditingAutoSave(false);
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-sm">
+        <span className={young ? "text-base" : ""}>{goal.name}</span>
+        <span className="opacity-70">
+          {formatCurrency(goal.savedAmount)} / {formatCurrency(goal.targetAmount)}
+        </span>
+      </div>
+      <div className={`w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10 ${young ? "h-4" : "h-2"}`}>
+        <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${progress}%` }} />
+      </div>
+
+      {!goal.completedAt && weeklyContribution > 0 && (
+        <p className="text-xs opacity-60">
+          🔄 Auto-saving {formatCurrency(weeklyContribution)}/wk
+          {schedule && ` — ~${schedule.weeksToGo} payday${schedule.weeksToGo === 1 ? "" : "s"} to go`}
+        </p>
+      )}
+
+      {!goal.completedAt && (
+        <div className="flex flex-wrap items-center gap-2 pt-0.5">
+          <button
+            onClick={() => onMutate((s) => allocateToGoal(s, goal.id, Math.min(step, available)))}
+            className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
+            disabled={available <= 0}
+          >
+            + ${step}
+          </button>
+          <button
+            onClick={() => onMutate((s) => allocateToGoal(s, goal.id, -Math.min(step, goal.savedAmount)))}
+            className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
+            disabled={goal.savedAmount <= 0}
+          >
+            - ${step}
+          </button>
+          <button
+            onClick={() => setEditingAutoSave((v) => !v)}
+            className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
+          >
+            {weeklyContribution > 0 ? "🔄 Edit auto-save" : "🔄 Auto-save"}
+          </button>
+          {schedule && (
+            <button
+              onClick={() => setShowCalendar((v) => !v)}
+              className={`rounded-md border border-black/20 dark:border-white/20 ${young ? "px-4 py-2 text-base" : "px-2 py-1 text-xs"}`}
+            >
+              📅 {showCalendar ? "Hide" : "Show"} calendar
+            </button>
+          )}
+          {role === "parent" && <DeleteGoalButton goalId={goal.id} onMutate={onMutate} />}
+        </div>
+      )}
+
+      {goal.completedAt && pendingSpend && <span className="text-xs opacity-70">Asked Dad — waiting 🕐</span>}
+      {goal.completedAt && !pendingSpend && (
+        <button
+          onClick={() => onMutate((s) => requestGoalSpend(s, goal.id))}
+          className={`rounded-md bg-green-600 text-white ${young ? "px-4 py-2 text-base" : "px-3 py-1 text-xs"}`}
+        >
+          Spend it! 🎉
+        </button>
+      )}
+
+      {editingAutoSave && (
+        <div className="flex items-center gap-2 pt-1">
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={autoSaveInput}
+            onChange={(event) => setAutoSaveInput(event.target.value)}
+            placeholder="$/wk"
+            className={`w-24 rounded-md border border-black/20 px-2 py-1 dark:border-white/20 dark:bg-transparent ${young ? "rounded-xl py-2 text-base" : "text-xs"}`}
+          />
+          <button
+            onClick={saveAutoSave}
+            className={`rounded-md bg-black px-2 py-1 text-white dark:bg-white dark:text-black ${young ? "rounded-xl px-4 py-2 text-base" : "text-xs"}`}
+          >
+            Save
+          </button>
+        </div>
+      )}
+
+      {showCalendar && schedule && <GoalCalendar schedule={schedule} color={kidColor(kid)} />}
+    </div>
   );
 }
 
@@ -742,4 +904,8 @@ function formatCurrency(amount: number): string {
 
 function formatPercent(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`;
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }

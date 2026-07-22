@@ -1,4 +1,4 @@
-import { recordTransaction } from "./mutations";
+import { allocateToGoal, availableBalanceForKid, recordTransaction } from "./mutations";
 import type { FamilyBankState, KidProfile } from "./schema";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -55,9 +55,31 @@ function processAllowanceForKid(state: FamilyBankState, kid: KidProfile, now: Da
         candidate.id === kid.id ? { ...candidate, lastAllowancePaidAt: paidAt } : candidate,
       ),
     };
+    working = autoSaveTowardGoals(working, kid.id, paidAt);
 
     due = new Date(due.getTime() + WEEK_MS);
     payments++;
+  }
+
+  return working;
+}
+
+/**
+ * Sets aside each goal's configured weekly amount from this payday's allowance, in the order the
+ * goals were created — capped by whatever's actually available so one goal's auto-save never
+ * overdraws another's.
+ */
+function autoSaveTowardGoals(state: FamilyBankState, kidId: string, at: string): FamilyBankState {
+  let working = state;
+  const goals = working.goals
+    .filter((goal) => goal.kidId === kidId && !goal.completedAt && (goal.weeklyContribution ?? 0) > 0)
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+
+  for (const goal of goals) {
+    const remaining = goal.targetAmount - goal.savedAmount;
+    const available = availableBalanceForKid(working, kidId);
+    const amount = round2(Math.min(goal.weeklyContribution ?? 0, remaining, available));
+    if (amount > 0) working = allocateToGoal(working, goal.id, amount, at);
   }
 
   return working;

@@ -93,6 +93,25 @@ export interface SavingsGoal {
   completedAt?: string;
   /** Set once the goal's money was actually spent (via an approved goal-spend request). */
   spentAt?: string;
+  /** Dollars auto-set-aside from each allowance payday toward this goal. Unset/0 = manual saving only. */
+  weeklyContribution?: number;
+}
+
+/**
+ * Money a kid has earned (currently only from an approved quest) but hasn't put in the bank yet.
+ * The kid decides how to split it — some/all toward a goal, the rest to their main account —
+ * before it becomes a real transaction.
+ */
+export interface Envelope {
+  id: string;
+  kidId: string;
+  amount: number;
+  /** What this envelope is for, e.g. the quest title — shown on the envelope itself. */
+  title: string;
+  bountyId?: string;
+  createdAt: string;
+  /** Set once the kid has split and deposited the envelope's money. */
+  openedAt?: string;
 }
 
 export type BountyStatus =
@@ -217,6 +236,8 @@ export type AuditUndo =
   | { kind: "revert-withdrawal-approval"; requestId: string; transactionId: string; goalId?: string; goalAmount?: number }
   | { kind: "revert-bounty-claim"; bountyId: string }
   | { kind: "revert-bounty-approval"; bountyId: string; transactionId: string }
+  | { kind: "revert-bounty-envelope"; bountyId: string; envelopeId: string }
+  | { kind: "revert-envelope-open"; envelopeId: string; transactionId: string; goalAllocations: { goalId: string; amount: number }[] }
   | { kind: "restore-tax-pot"; kidId: string; transactionId: string; previousBalance: number };
 
 /** One entry in the family's activity log — who did what, and (when possible) how to undo it. */
@@ -258,6 +279,7 @@ export interface FamilyBankState {
   parentProfiles: ParentProfile[];
   transactions: Transaction[];
   goals: SavingsGoal[];
+  envelopes: Envelope[];
   bounties: Bounty[];
   streaks: StreakState[];
   taxPots: TaxPot[];
@@ -278,20 +300,23 @@ export const CURRENT_STATE_VERSION = 1;
  *   to an empty per-kid list — the parent re-enters each kid's real balance once.
  * - `parentProfiles` defaults to an empty array if the state predates named parent profiles.
  * - `auditLog` defaults to an empty array if the state predates the activity log.
+ * - `envelopes` defaults to an empty array if the state predates the quest-reward envelope flow.
  */
 export function normalizeState(state: FamilyBankState): FamilyBankState {
   const legacy = state as unknown as {
     parentProfiles?: ParentProfile[];
     reconciliation?: { actualHysaBalances?: KidHysaBalance[]; cashAdjustments?: CashAdjustment[] };
     auditLog?: AuditEntry[];
+    envelopes?: Envelope[];
     taxPots?: (TaxPot | Omit<TaxPot, "totalPaid">)[];
   };
 
   const needsReconciliationFix = !Array.isArray(legacy.reconciliation?.actualHysaBalances);
   const needsParentProfiles = !Array.isArray(legacy.parentProfiles);
   const needsAuditLog = !Array.isArray(legacy.auditLog);
+  const needsEnvelopes = !Array.isArray(legacy.envelopes);
   const needsTaxPotTotals = (legacy.taxPots ?? []).some((pot) => typeof (pot as TaxPot).totalPaid !== "number");
-  if (!needsReconciliationFix && !needsParentProfiles && !needsAuditLog && !needsTaxPotTotals) return state;
+  if (!needsReconciliationFix && !needsParentProfiles && !needsAuditLog && !needsEnvelopes && !needsTaxPotTotals) return state;
 
   return {
     ...state,
@@ -300,6 +325,7 @@ export function normalizeState(state: FamilyBankState): FamilyBankState {
       ? { actualHysaBalances: [], cashAdjustments: legacy.reconciliation?.cashAdjustments ?? [] }
       : state.reconciliation,
     auditLog: needsAuditLog ? [] : state.auditLog,
+    envelopes: needsEnvelopes ? [] : state.envelopes,
     // Pre-existing installs have no record of tax withheld before this field existed — the
     // current pot balance (what hasn't been refunded yet) is the best floor we can backfill.
     taxPots: needsTaxPotTotals
@@ -328,6 +354,7 @@ export function createEmptyState(familyId: string): FamilyBankState {
     parentProfiles: [],
     transactions: [],
     goals: [],
+    envelopes: [],
     bounties: [],
     streaks: [],
     taxPots: [],
