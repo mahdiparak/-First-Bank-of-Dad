@@ -14,7 +14,7 @@ import { ParentSettingsPanel } from "@/components/parent-settings";
 import { ProfilePanel } from "@/components/profile-panel";
 import { ProfileSettingsPanel } from "@/components/profile-settings";
 import { ReconciliationPanel } from "@/components/reconciliation-panel";
-import { RoleChooser } from "@/components/role-gate";
+import { KidPinPrompt, RoleChooser } from "@/components/role-gate";
 import { SyncSettings } from "@/components/sync-settings";
 import { TaxPots } from "@/components/tax-pots";
 import { runScheduledEngines } from "@/lib/allowance";
@@ -73,13 +73,17 @@ interface InitialRole {
   role: DeviceRole | null;
   parentId?: string;
   kidId?: string;
+  /** Set instead of resolving the role when the matched kid has a PIN — the caller must show KidPinPrompt first. */
+  pendingKidId?: string;
 }
 
 /**
  * Only runs when this device has never chosen a role. First tries the family-PIN-less
  * bootstrap case, then — for a device signed into Cloudflare Access as a named parent or
  * kid — matches that email against parentProfiles/kids so the right dashboard just opens,
- * no RoleChooser needed. A device that already picked a role keeps it on every later load.
+ * no RoleChooser needed. If the matched kid has their own PIN set, the role isn't saved yet;
+ * the caller shows KidPinPrompt and only commits the role once it's entered correctly. A
+ * device that already picked a role keeps it on every later load.
  */
 async function resolveInitialRole(currentRole: DeviceRole | null, state: FamilyBankState): Promise<InitialRole> {
   const bootstrapped = await resolveBootstrapRole(currentRole, state);
@@ -87,6 +91,11 @@ async function resolveInitialRole(currentRole: DeviceRole | null, state: FamilyB
 
   const match = await resolveRoleFromAccessIdentity(state);
   if (!match) return { role: null };
+
+  if (match.role === "kid" && match.kidId) {
+    const kid = state.kids.find((candidate) => candidate.id === match.kidId);
+    if (kid?.pinHash) return { role: null, pendingKidId: kid.id };
+  }
 
   await saveDeviceRole(match.role);
   if (match.role === "parent" && match.parentId) await saveDeviceParentId(match.parentId);
@@ -104,6 +113,7 @@ export default function Home() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("profile");
   const [deviceRole, setDeviceRole] = useState<DeviceRole | null>(null);
   const [deviceKidId, setDeviceKidId] = useState<string | null>(null);
+  const [pendingKidId, setPendingKidId] = useState<string | null>(null);
   const [deviceParentId, setDeviceParentId] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
   const [importError, setImportError] = useState<string | null>(null);
@@ -152,6 +162,7 @@ export default function Home() {
         setDeviceRole(resolved.role);
         if (resolved.parentId) setDeviceParentId(resolved.parentId);
         if (resolved.kidId) setDeviceKidId(resolved.kidId);
+        if (resolved.pendingKidId) setPendingKidId(resolved.pendingKidId);
       } else {
         setDeviceRole(role);
       }
@@ -248,6 +259,7 @@ export default function Home() {
       setDeviceRole(resolved.role);
       if (resolved.parentId) setDeviceParentId(resolved.parentId);
       if (resolved.kidId) setDeviceKidId(resolved.kidId);
+      if (resolved.pendingKidId) setPendingKidId(resolved.pendingKidId);
     }
     setPhase("ready");
     startSync(key, roomId);
@@ -266,6 +278,7 @@ export default function Home() {
       setDeviceRole(resolved.role);
       if (resolved.parentId) setDeviceParentId(resolved.parentId);
       if (resolved.kidId) setDeviceKidId(resolved.kidId);
+      if (resolved.pendingKidId) setPendingKidId(resolved.pendingKidId);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "Import failed.");
     }
@@ -326,6 +339,7 @@ export default function Home() {
     deviceRoleRef.current = "kid";
     setDeviceRole("kid");
     setDeviceKidId(kidId);
+    setPendingKidId(null);
     void saveDeviceRole("kid");
     void saveDeviceKidId(kidId);
   }
@@ -384,11 +398,20 @@ export default function Home() {
   }
 
   if (state && deviceRole === null) {
+    const pendingKid = pendingKidId ? (state.kids.find((kid) => kid.id === pendingKidId) ?? null) : null;
     return (
       <>
         <InstallBanner />
         <main className="flex flex-1 items-center justify-center p-6">
-          <RoleChooser state={state} onChooseParent={handleChooseParentRole} onChooseKid={handleChooseKidRole} />
+          {pendingKid ? (
+            <KidPinPrompt
+              kid={pendingKid}
+              onSuccess={() => handleChooseKidRole(pendingKid.id)}
+              onCancel={() => setPendingKidId(null)}
+            />
+          ) : (
+            <RoleChooser state={state} onChooseParent={handleChooseParentRole} onChooseKid={handleChooseKidRole} />
+          )}
         </main>
       </>
     );

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { hasKidPinGate, verifyKidPin } from "@/lib/kid-auth";
 import { hasParentPinGate, verifyParentPin } from "@/lib/parent-auth";
-import { parentAvatar, type FamilyBankState } from "@/lib/schema";
+import { kidAvatar, parentAvatar, type FamilyBankState, type KidProfile } from "@/lib/schema";
 
 /** Shown on a device with no locally-remembered role once a Parent PIN already exists elsewhere in the family. */
 export function RoleChooser({
@@ -14,9 +15,10 @@ export function RoleChooser({
   onChooseParent: (parentId?: string) => void;
   onChooseKid: (kidId: string) => void;
 }) {
-  const [mode, setMode] = useState<"choose" | "pick-kid" | "pick-parent" | "parent-pin">("choose");
+  const [mode, setMode] = useState<"choose" | "pick-kid" | "pick-parent" | "parent-pin" | "kid-pin">("choose");
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pendingKid, setPendingKid] = useState<KidProfile | null>(null);
 
   function afterUnlock(parentId?: string) {
     if (parentId) {
@@ -45,6 +47,28 @@ export function RoleChooser({
       setError("Wrong PIN.");
       setPin("");
     }
+  }
+
+  function handleKidClick(kid: KidProfile) {
+    if (!hasKidPinGate(kid)) {
+      onChooseKid(kid.id);
+      return;
+    }
+    setPendingKid(kid);
+    setMode("kid-pin");
+  }
+
+  if (mode === "kid-pin" && pendingKid) {
+    return (
+      <KidPinPrompt
+        kid={pendingKid}
+        onSuccess={() => onChooseKid(pendingKid.id)}
+        onCancel={() => {
+          setPendingKid(null);
+          setMode("pick-kid");
+        }}
+      />
+    );
   }
 
   if (mode === "parent-pin") {
@@ -103,7 +127,7 @@ export function RoleChooser({
           {state.kids.map((kid) => (
             <button
               key={kid.id}
-              onClick={() => onChooseKid(kid.id)}
+              onClick={() => handleKidClick(kid)}
               className="rounded-full border border-black/20 px-3 py-1.5 text-sm dark:border-white/20"
             >
               {kid.name}
@@ -137,6 +161,61 @@ export function RoleChooser({
       </div>
       {state.kids.length === 0 && <p className="text-xs opacity-60">Add a kid from Parent mode first.</p>}
     </div>
+  );
+}
+
+/**
+ * Gates opening a kid's own Kid View behind their PIN — shown after Cloudflare Access email
+ * login auto-matches a kid, or after picking that kid from the RoleChooser, whenever that kid
+ * has a PIN set. A kid with no PIN never sees this.
+ */
+export function KidPinPrompt({
+  kid,
+  onSuccess,
+  onCancel,
+}: {
+  kid: KidProfile;
+  onSuccess: () => void;
+  onCancel: () => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const ok = await verifyKidPin(kid, pin);
+    if (ok) {
+      onSuccess();
+    } else {
+      setError("Wrong PIN.");
+      setPin("");
+    }
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="w-full max-w-sm space-y-3 rounded-xl border border-black/10 p-6 dark:border-white/10"
+    >
+      <h1 className="text-lg font-semibold">
+        {kidAvatar(kid)} Enter {kid.name}&apos;s PIN
+      </h1>
+      <input
+        type="password"
+        inputMode="numeric"
+        value={pin}
+        onChange={(event) => setPin(event.target.value)}
+        className="w-full rounded-md border border-black/20 px-3 py-2 dark:border-white/20 dark:bg-transparent"
+        autoFocus
+      />
+      {error && <p className="text-sm text-red-500">{error}</p>}
+      <button type="submit" className="w-full rounded-md bg-black px-3 py-2 text-white dark:bg-white dark:text-black">
+        Unlock
+      </button>
+      <button type="button" onClick={onCancel} className="w-full text-sm opacity-70">
+        Not you?
+      </button>
+    </form>
   );
 }
 

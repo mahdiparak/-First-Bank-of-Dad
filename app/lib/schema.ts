@@ -13,6 +13,8 @@ export interface KidProfile {
   email?: string;
   /** Overrides the age-based UI choice. "auto" (or unset) picks by age against YOUNG_KID_MAX_AGE. */
   viewMode?: "auto" | "kid" | "teen";
+  /** Optional PIN (SHA-256 hash) a kid enters after email login to open their own Kid View. Unset = no PIN needed — fine for a younger kid on a shared/trusted device. */
+  pinHash?: string;
 }
 
 /** Kids under this age get the simplified, picture-first UI. */

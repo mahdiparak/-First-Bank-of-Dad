@@ -8,6 +8,7 @@ const PBKDF2_ITERATIONS = 600_000; // OWASP 2023 minimum for PBKDF2-SHA256
 const KEY_DERIVATION_SALT = new TextEncoder().encode("first-bank-of-dad:key:v1");
 const ROOM_ID_DOMAIN = "first-bank-of-dad:room:v1:";
 const PARENT_PIN_DOMAIN = "first-bank-of-dad:parent-pin:v1:";
+const KID_PIN_DOMAIN = "first-bank-of-dad:kid-pin:v1:";
 const IV_BYTES = 12;
 
 function normalizePhrase(phrase: string): string {
@@ -60,6 +61,19 @@ export async function hashPin(pin: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(PARENT_PIN_DOMAIN + pin.trim()),
+  );
+  return toHex(digest);
+}
+
+/**
+ * Hashes a kid's own PIN, entered after email login to open their Kid View. Same "speed bump,
+ * not a security boundary" caveat as hashPin — domain-separated so it can never collide with a
+ * parent's PIN hash.
+ */
+export async function hashKidPin(pin: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(KID_PIN_DOMAIN + pin.trim()),
   );
   return toHex(digest);
 }
