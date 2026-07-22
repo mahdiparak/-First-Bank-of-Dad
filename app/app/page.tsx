@@ -20,6 +20,7 @@ import { TaxPots } from "@/components/tax-pots";
 import { runScheduledEngines } from "@/lib/allowance";
 import { resolveRoleFromAccessIdentity } from "@/lib/access-identity";
 import { diffCelebrations, type CelebrationEvent } from "@/lib/celebrations";
+import { notifyNewQuests } from "@/lib/push-notifications";
 import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
 import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
@@ -194,9 +195,12 @@ export default function Home() {
     if (state) {
       const events = diffCelebrations(prevStateRef.current, state);
       if (events.length > 0) setCelebrations((queue) => [...queue, ...events].slice(-20));
+      // A parent posting a quest on their own device reaches a kid's device as an incoming sync
+      // update, which lands right here too — this is what actually nudges their phone.
+      if (deviceRole === "kid") notifyNewQuests(prevStateRef.current, state);
     }
     prevStateRef.current = state;
-  }, [state]);
+  }, [state, deviceRole]);
 
   function startSync(key: CryptoKey, roomId: string) {
     if (!RELAY_URL) {

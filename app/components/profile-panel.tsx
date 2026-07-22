@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { notificationPermission, requestNotificationPermission } from "@/lib/push-notifications";
 import { kidAvatar, parentAvatar, type FamilyBankState } from "@/lib/schema";
 import { ParentLoginPrompt } from "./role-gate";
 
@@ -96,6 +97,7 @@ export function ProfilePanel({
                   Signed in as {kidAvatar(currentKid)} {currentKid.name}.
                 </p>
               )}
+              <NotificationToggle />
               {switchingToParent ? (
                 <ParentLoginPrompt state={state} onSuccess={handleSwitchSuccess} onCancel={() => setSwitchingToParent(false)} />
               ) : (
@@ -112,5 +114,46 @@ export function ProfilePanel({
         </div>
       )}
     </span>
+  );
+}
+
+/** Lets a kid opt in to a real OS notification when a new quest is posted — see lib/push-notifications.ts. */
+function NotificationToggle() {
+  const [permission, setPermission] = useState<NotificationPermission | "unsupported">(() => notificationPermission());
+  const [checked, setChecked] = useState(false);
+
+  // The lazy initializer above already reads the real value on the client; this effect just
+  // defers rendering it until after hydration, so server and client agree on the first paint.
+  useEffect(() => {
+    queueMicrotask(() => setChecked(true));
+  }, []);
+
+  if (!checked || permission === "unsupported") return null;
+
+  if (permission === "granted") {
+    return <p className="text-xs opacity-60">🔔 You&apos;ll get a nudge when a new quest is posted.</p>;
+  }
+
+  if (permission === "denied") {
+    return (
+      <p className="text-xs opacity-60">
+        🔕 Notifications are blocked — turn them on for this site in your browser settings to get nudged about new
+        quests.
+      </p>
+    );
+  }
+
+  async function handleEnable() {
+    setPermission(await requestNotificationPermission());
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleEnable()}
+      className="w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+    >
+      🔔 Get notified about new quests
+    </button>
   );
 }
