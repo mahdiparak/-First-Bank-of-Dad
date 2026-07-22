@@ -162,6 +162,29 @@ export function weeksWithoutWithdrawalFor(state: FamilyBankState, kidId: string,
   return currentStreakWeeks(state, kidId, now);
 }
 
+/** Every date in the given month that's a payday — a fixed weekday, so this is just every date
+ *  in the month matching kid.paydayWeekday, past or future. */
+export function paydaysInMonth(kid: KidProfile, year: number, month: number): Date[] {
+  const days: Date[] = [];
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = new Date(year, month, d);
+    if (date.getDay() === kid.paydayWeekday) days.push(date);
+  }
+  return days;
+}
+
+/** The calendar date a given streak week completes, counted from the kid's streak anchor (their
+ *  last withdrawal, or account creation if they've never withdrawn) — week 1 lands 7 days after
+ *  the anchor, week 2 lands 14 days after, matching how weeksWithoutWithdrawalFor counts elapsed
+ *  weeks. Used to plot streak progress and projected milestone paydays on a calendar. */
+export function streakWeekDate(state: FamilyBankState, kidId: string, week: number): Date {
+  const kid = state.kids.find((candidate) => candidate.id === kidId);
+  const streak = state.streaks.find((candidate) => candidate.kidId === kidId);
+  const since = streak?.lastWithdrawalAt ?? kid?.createdAt ?? new Date().toISOString();
+  return new Date(new Date(since).getTime() + week * WEEK_MS);
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
