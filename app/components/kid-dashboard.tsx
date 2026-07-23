@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { daysUntilPayday, paydaysInMonth, streakWeekDate, weeksWithoutWithdrawalFor } from "@/lib/allowance";
+import {
+  daysUntilPayday,
+  paydaysInMonth,
+  streakBreakDates,
+  streakDisplayStartDate,
+  streakProgressDays,
+  streakWeekDate,
+  weeksWithoutWithdrawalFor,
+} from "@/lib/allowance";
 import { estimateGoalSchedule, type GoalSchedule } from "@/lib/goal-schedule";
 import {
   availableBalanceForKid,
@@ -177,6 +185,7 @@ function HomeTab({
         <p className="text-xs opacity-60">
           Weeks without an impulse withdrawal. Spending a finished goal never breaks your streak.
         </p>
+        <p className="text-xs opacity-60">Streak started {formatDate(streakDisplayStartDate(state, kid.id))}.</p>
         {nextMilestone && (
           <p className="text-xs opacity-60">
             {nextMilestone.weeks - streakWeeks} more week{nextMilestone.weeks - streakWeeks === 1 ? "" : "s"} for a{" "}
@@ -184,7 +193,7 @@ function HomeTab({
           </p>
         )}
         <div className="mt-3 border-t border-black/10 pt-3 dark:border-white/10">
-          <StreakCalendar state={state} kid={kid} streakWeeks={streakWeeks} nextMilestone={nextMilestone} color={color} />
+          <StreakCalendar state={state} kid={kid} nextMilestone={nextMilestone} color={color} />
         </div>
       </section>
 
@@ -211,40 +220,49 @@ function PaydayCalendar({ kid, color }: { kid: KidProfile; color: string }) {
   );
 }
 
-/** A month calendar showing the Dad Match streak: each week already banked gets a ✅, and — if
- *  the streak holds — the date of the next milestone bonus gets a 💲 so a kid can see exactly
- *  when a broken streak would have cost them a payout. */
+/** A month calendar showing the Dad Match streak day by day: every day counted so far gets a ✅
+ *  (every 7th, a completed week, gets a 🔥), a broken streak's day gets a ❌ — wherever in the
+ *  past it happened — and, if the current streak holds, the next milestone bonus day gets a 💲.
+ *  Navigating to a future month reveals that projected bonus payday. */
 function StreakCalendar({
   state,
   kid,
-  streakWeeks,
   nextMilestone,
   color,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
-  streakWeeks: number;
   nextMilestone?: { weeks: number; bonus: number };
   color: string;
 }) {
-  const horizonWeeks = Math.max(streakWeeks, nextMilestone?.weeks ?? streakWeeks);
-
   const allMarkers = useMemo(() => {
     const markers: CalendarMarker[] = [];
-    for (let week = 1; week <= horizonWeeks; week++) {
-      const date = streakWeekDate(state, kid.id, week);
-      if (week <= streakWeeks) {
-        markers.push({ date, content: "✅", title: `Week ${week} of your streak` });
-      } else if (nextMilestone && week === nextMilestone.weeks) {
-        markers.push({
-          date,
-          content: "💲",
-          title: `Dad Match bonus day — ${formatCurrency(nextMilestone.bonus)} if the streak holds`,
-        });
-      }
+
+    const progressDays = streakProgressDays(state, kid.id);
+    progressDays.forEach((date, index) => {
+      const dayNumber = index + 1;
+      const isWeekComplete = dayNumber % 7 === 0;
+      markers.push({
+        date,
+        content: isWeekComplete ? "🔥" : "✅",
+        title: isWeekComplete ? `Week ${dayNumber / 7} banked!` : `Day ${dayNumber} of your streak`,
+      });
+    });
+
+    for (const date of streakBreakDates(state, kid.id)) {
+      markers.push({ date, content: "❌", title: "Streak broken — a new one started the next day" });
     }
+
+    if (nextMilestone) {
+      markers.push({
+        date: streakWeekDate(state, kid.id, nextMilestone.weeks),
+        content: "💲",
+        title: `Dad Match bonus day — ${formatCurrency(nextMilestone.bonus)} if the streak holds`,
+      });
+    }
+
     return markers;
-  }, [state, kid.id, streakWeeks, nextMilestone, horizonWeeks]);
+  }, [state, kid.id, nextMilestone]);
 
   const getMarkers = useCallback(
     (year: number, month: number): CalendarMarker[] =>
@@ -258,7 +276,9 @@ function StreakCalendar({
       color={color}
       legend={
         <>
-          <span>✅ Streak week banked</span>
+          <span>✅ Day counted</span>
+          <span>🔥 Week banked</span>
+          <span>❌ Streak broken</span>
           {nextMilestone && <span>💲 Bonus payday if it holds</span>}
         </>
       }
@@ -890,6 +910,10 @@ function formatCurrency(amount: number): string {
 
 function formatPercent(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`;
+}
+
+function formatDate(date: Date): string {
+  return date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 }
 
 function round2(value: number): number {

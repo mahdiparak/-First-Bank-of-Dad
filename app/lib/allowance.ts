@@ -207,6 +207,42 @@ export function streakWeekDate(state: FamilyBankState, kidId: string, week: numb
   return new Date(new Date(since).getTime() + week * WEEK_MS);
 }
 
+/**
+ * The calendar day the *currently counted* streak's day-by-day progress begins: the day after a
+ * broken streak's last withdrawal (so the break itself can be marked on its own day, and "day 1"
+ * of the fresh streak reads as a clean restart), or account creation day if this kid has never
+ * broken a streak. Lines up exactly with streakWeekDate — day 7*N of this streak always lands on
+ * the same calendar day as `streakWeekDate(state, kidId, N)`.
+ */
+export function streakDisplayStartDate(state: FamilyBankState, kidId: string): Date {
+  const kid = state.kids.find((candidate) => candidate.id === kidId);
+  const streak = state.streaks.find((candidate) => candidate.kidId === kidId);
+  const anchorDay = startOfDay(new Date(streak?.lastWithdrawalAt ?? kid?.createdAt ?? new Date().toISOString()));
+  return streak?.lastWithdrawalAt ? new Date(anchorDay.getTime() + DAY_MS) : anchorDay;
+}
+
+/** Every calendar day, from the start of the currently counted streak through today, that counts
+ *  toward it — for marking daily progress on a calendar rather than only whole-week milestones. */
+export function streakProgressDays(state: FamilyBankState, kidId: string, now: Date = new Date()): Date[] {
+  const start = streakDisplayStartDate(state, kidId);
+  const today = startOfDay(now);
+  const totalDays = Math.round((today.getTime() - start.getTime()) / DAY_MS) + 1;
+  const days: Date[] = [];
+  for (let i = 0; i < totalDays && i < MAX_CATCH_UP_PAYMENTS * 7; i++) {
+    days.push(new Date(start.getTime() + i * DAY_MS));
+  }
+  return days;
+}
+
+/** Every date this kid broke a Dad Match streak (an approved withdrawal that wasn't spending a
+ *  finished goal) — the whole history, so navigating to a past month still shows why a streak
+ *  reset there. */
+export function streakBreakDates(state: FamilyBankState, kidId: string): Date[] {
+  return state.withdrawalRequests
+    .filter((request) => request.kidId === kidId && request.status === "approved" && !request.goalId && request.resolvedAt)
+    .map((request) => new Date(request.resolvedAt as string));
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
