@@ -40,10 +40,17 @@ function processAllowanceForKid(state: FamilyBankState, kid: KidProfile, now: Da
   while (due.getTime() <= now.getTime() && payments < MAX_CATCH_UP_PAYMENTS) {
     const taxRate = working.parentSettings.taxRate;
     const taxAmount = round2(kid.weeklyAllowance * taxRate);
-    const netAmount = round2(kid.weeklyAllowance - taxAmount);
     const paidAt = due.toISOString();
 
-    working = recordTransaction(working, kid.id, netAmount, "💰", "allowance", "Weekly allowance", paidAt);
+    // Recorded as two ledger lines (gross pay, then the withholding) rather than one net
+    // transaction, so the Family Tax deduction is visible to the kid instead of a silent cut.
+    working = recordTransaction(working, kid.id, kid.weeklyAllowance, "💰", "allowance", "Weekly allowance", paidAt);
+    if (taxAmount > 0) {
+      // One millisecond after the allowance transaction so ledger/balance-history ordering is
+      // deterministic — same-instant transactions have no reliable sort order otherwise.
+      const taxAt = new Date(due.getTime() + 1).toISOString();
+      working = recordTransaction(working, kid.id, -taxAmount, "🧾", "tax", "Family Tax", taxAt);
+    }
     working = {
       ...working,
       taxPots: working.taxPots.map((pot) =>

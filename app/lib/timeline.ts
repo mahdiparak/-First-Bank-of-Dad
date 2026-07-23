@@ -101,9 +101,11 @@ export function buildMoneyTimeline(
     } else {
       real.push({ t: tMs, value });
     }
-    // Allowance and interest are the line's slope, not standout moments — annotating
-    // every week would bury the events kids should actually notice.
-    if (transaction.source !== "allowance" && transaction.source !== "interest") {
+    // Allowance, its tax withholding, and interest are the line's slope, not standout moments —
+    // annotating every week would bury the events kids should actually notice. A tax *refund*
+    // (positive amount) is still worth calling out.
+    const isRoutineTaxWithholding = transaction.source === "tax" && transaction.amount < 0;
+    if (transaction.source !== "allowance" && transaction.source !== "interest" && !isRoutineTaxWithholding) {
       events.push({ t: tMs, value, emoji: transaction.category, label: transaction.memo ?? transaction.source });
     }
   }
