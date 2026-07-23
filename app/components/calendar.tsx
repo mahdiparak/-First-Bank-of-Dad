@@ -9,7 +9,7 @@ export interface CalendarMarker {
 }
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
-const MONTH_LABELS = [
+export const MONTH_LABELS = [
   "January",
   "February",
   "March",
