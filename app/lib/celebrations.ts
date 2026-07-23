@@ -102,10 +102,10 @@ export function diffCelebrations(prev: FamilyBankState | null, next: FamilyBankS
       id: crypto.randomUUID(),
       kidId: envelope.kidId,
       kind: "envelope-arrived",
-      title: "You got an envelope!",
+      title: "Congratulations!",
       emoji: "💌",
       amount: envelope.amount,
-      detail: envelope.title,
+      detail: `Quest approved — "${envelope.title}". Open your envelope to add it to your balance.`,
     });
   }
 

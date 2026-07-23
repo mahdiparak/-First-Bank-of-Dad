@@ -89,6 +89,11 @@ export function ProfilePanel({
               <p className="text-xs opacity-60">
                 Edit names, emails, and PINs in ⚙️ Settings → 👤 Profile.
               </p>
+              <NotificationToggle
+                grantedText="🔔 You'll get a nudge when a kid claims a quest."
+                promptText="🔔 Get notified when a kid claims a quest"
+                deniedText="🔕 Notifications are blocked — turn them on for this site in your browser settings to get nudged when a kid claims a quest."
+              />
             </div>
           ) : (
             <div className="space-y-2">
@@ -97,7 +102,11 @@ export function ProfilePanel({
                   Signed in as {kidAvatar(currentKid)} {currentKid.name}.
                 </p>
               )}
-              <NotificationToggle />
+              <NotificationToggle
+                grantedText="🔔 You'll get a nudge when a new quest is posted."
+                promptText="🔔 Get notified about new quests"
+                deniedText="🔕 Notifications are blocked — turn them on for this site in your browser settings to get nudged about new quests."
+              />
               {switchingToParent ? (
                 <ParentLoginPrompt state={state} onSuccess={handleSwitchSuccess} onCancel={() => setSwitchingToParent(false)} />
               ) : (
@@ -117,8 +126,17 @@ export function ProfilePanel({
   );
 }
 
-/** Lets a kid opt in to a real OS notification when a new quest is posted — see lib/push-notifications.ts. */
-function NotificationToggle() {
+/** Lets either a kid or a parent opt in to a real OS notification — new quests for a kid,
+ *  claimed quests awaiting approval for a parent. See lib/push-notifications.ts. */
+function NotificationToggle({
+  grantedText,
+  promptText,
+  deniedText,
+}: {
+  grantedText: string;
+  promptText: string;
+  deniedText: string;
+}) {
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">(() => notificationPermission());
   const [checked, setChecked] = useState(false);
 
@@ -131,16 +149,11 @@ function NotificationToggle() {
   if (!checked || permission === "unsupported") return null;
 
   if (permission === "granted") {
-    return <p className="text-xs opacity-60">🔔 You&apos;ll get a nudge when a new quest is posted.</p>;
+    return <p className="text-xs opacity-60">{grantedText}</p>;
   }
 
   if (permission === "denied") {
-    return (
-      <p className="text-xs opacity-60">
-        🔕 Notifications are blocked — turn them on for this site in your browser settings to get nudged about new
-        quests.
-      </p>
-    );
+    return <p className="text-xs opacity-60">{deniedText}</p>;
   }
 
   async function handleEnable() {
@@ -153,7 +166,7 @@ function NotificationToggle() {
       onClick={() => void handleEnable()}
       className="w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
     >
-      🔔 Get notified about new quests
+      {promptText}
     </button>
   );
 }

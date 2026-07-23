@@ -76,9 +76,9 @@ function EnvelopeCard({
         }`}
       >
         <p className="text-4xl">💌</p>
-        <p className={`mt-1 font-semibold ${young ? "text-xl" : "text-lg"}`}>You got an envelope!</p>
+        <p className={`mt-1 font-semibold ${young ? "text-xl" : "text-lg"}`}>Congratulations! 🎉</p>
         <p className="text-sm opacity-70">
-          {envelope.title} — {formatCurrency(envelope.amount)}
+          Quest done — {envelope.title} — {formatCurrency(envelope.amount)}
         </p>
         <p className="mt-2 text-sm font-semibold underline">Tap to open</p>
       </button>

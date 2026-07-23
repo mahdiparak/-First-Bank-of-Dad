@@ -1,5 +1,9 @@
 import { questIcon, type Bounty, type FamilyBankState } from "./schema";
 
+function kidName(state: FamilyBankState, kidId: string): string {
+  return state.kids.find((kid) => kid.id === kidId)?.name ?? "A kid";
+}
+
 const BULK_THRESHOLD = 5; // a first sync landing dozens of quests at once isn't a "new quest" moment
 
 export function notificationsSupported(): boolean {
@@ -53,4 +57,36 @@ export function notifyNewQuests(prev: FamilyBankState | null, next: FamilyBankSt
   if (newlyOpen.length === 0 || newlyOpen.length > BULK_THRESHOLD) return;
 
   for (const bounty of newlyOpen) notifyNewQuest(bounty);
+}
+
+function notifyBountyClaimed(bounty: Bounty, claimant: string): void {
+  void showNotification(`🙋 ${claimant} claimed a quest!`, {
+    body: `${questIcon(bounty)} ${bounty.title} — ${formatCurrency(bounty.reward)}, waiting for your approval`,
+    tag: `quest-claim-${bounty.id}`,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+  });
+}
+
+/**
+ * Nudges every parent device the moment a kid claims a quest, so the "Checking…" state a kid
+ * sees on their end doesn't just sit there until a parent happens to open the Approvals tab.
+ * Runs independently on each parent's own device — whichever ones have notifications enabled
+ * all get nudged. Same bulk/first-sync guard as notifyNewQuests.
+ */
+export function notifyClaimedBounties(prev: FamilyBankState | null, next: FamilyBankState): void {
+  if (!prev || prev === next) return;
+  if (notificationPermission() !== "granted") return;
+
+  const prevPending = new Set(
+    prev.bounties.filter((bounty) => bounty.status === "pending-approval").map((bounty) => bounty.id),
+  );
+  const newlyClaimed = next.bounties.filter(
+    (bounty) => bounty.status === "pending-approval" && !prevPending.has(bounty.id),
+  );
+  if (newlyClaimed.length === 0 || newlyClaimed.length > BULK_THRESHOLD) return;
+
+  for (const bounty of newlyClaimed) {
+    notifyBountyClaimed(bounty, bounty.claimedByKidId ? kidName(next, bounty.claimedByKidId) : "A kid");
+  }
 }
