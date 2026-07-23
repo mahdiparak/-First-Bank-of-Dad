@@ -62,6 +62,13 @@ function primeState(loaded: FamilyBankState | null): FamilyBankState | null {
   return processed;
 }
 
+/** True for a state that's never held real data — e.g. a device where "Start fresh" was clicked
+ *  instead of waiting for the first sync. Used so an empty device never blocks or gets mistaken
+ *  for having anything worth sending. */
+function isEmptyState(candidate: FamilyBankState): boolean {
+  return candidate.kids.length === 0 && candidate.transactions.length === 0;
+}
+
 /** If no Parent PIN exists yet anywhere in the family, this must be the first-ever setup device. */
 async function resolveBootstrapRole(currentRole: DeviceRole | null, state: FamilyBankState): Promise<DeviceRole | null> {
   if (currentRole) return currentRole;
@@ -134,6 +141,12 @@ export default function Home() {
   const deviceRoleRef = useRef<DeviceRole | null>(null);
   const syncClientRef = useRef<SyncClient | null>(null);
   const prevStateRef = useRef<FamilyBankState | null>(null);
+  // Mirrors `state` for use inside the sync callbacks below, which are handed to SyncClient once
+  // at connect time and would otherwise close over a stale value from that moment.
+  const stateRef = useRef<FamilyBankState | null>(null);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     void (async () => {
@@ -217,7 +230,25 @@ export default function Home() {
       relayUrl: RELAY_URL,
       key,
       roomId,
-      onStatusChange: setSyncStatus,
+      onStatusChange: (status) => {
+        setSyncStatus(status);
+        // The relay never replays history, so joining a room tells you nothing about whether
+        // anyone else is already there with real data. On every fresh connection, either hand
+        // over what we have (so a peer that's been waiting gets it immediately) or ask for it
+        // (so we don't just sit "Synced" but silent if we're the empty one).
+        if (status === "open") {
+          const mine = stateRef.current;
+          if (mine && !isEmptyState(mine)) {
+            void broadcastSnapshot(mine);
+          } else if (deviceIdRef.current) {
+            void syncClientRef.current?.send({
+              type: "request-snapshot",
+              deviceId: deviceIdRef.current,
+              sentAt: new Date().toISOString(),
+            });
+          }
+        }
+      },
       onMutation: (mutation) => void applyMutation(mutation),
     });
     syncClientRef.current = client;
@@ -232,13 +263,14 @@ export default function Home() {
       // clock stamp — it would otherwise permanently outrank every real snapshot arriving after
       // it and "Sync now" would look like it does nothing. An empty local state never wins.
       const incoming = normalizeState(mutation.state);
-      const currentIsEmpty = (candidate: FamilyBankState) =>
-        candidate.kids.length === 0 && candidate.transactions.length === 0;
       setState((current) => {
-        if (current && !currentIsEmpty(current) && current.updatedAt >= incoming.updatedAt) return current;
+        if (current && !isEmptyState(current) && current.updatedAt >= incoming.updatedAt) return current;
         void saveState(incoming);
         return incoming;
       });
+    } else if (mutation.type === "request-snapshot") {
+      const mine = stateRef.current;
+      if (mine && !isEmptyState(mine)) void broadcastSnapshot(mine);
     } else {
       setState((current) => {
         if (!current) return current;
