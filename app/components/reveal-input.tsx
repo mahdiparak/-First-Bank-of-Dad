@@ -8,11 +8,13 @@ export function RevealInput({
   onChange,
   placeholder,
   className = "",
+  autoFocus = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  autoFocus?: boolean;
 }) {
   const [visible, setVisible] = useState(false);
 
@@ -23,6 +25,7 @@ export function RevealInput({
         onChange={(event) => onChange(event.target.value)}
         type={visible ? "text" : "password"}
         placeholder={placeholder}
+        autoFocus={autoFocus}
         className={`w-full pr-9 ${className}`}
       />
       <button

@@ -14,7 +14,9 @@ import { ParentSettingsPanel } from "@/components/parent-settings";
 import { ProfilePanel } from "@/components/profile-panel";
 import { ProfileSettingsPanel } from "@/components/profile-settings";
 import { ReconciliationPanel } from "@/components/reconciliation-panel";
+import { RevealInput } from "@/components/reveal-input";
 import { KidPinPrompt, RoleChooser } from "@/components/role-gate";
+import { FamilyPhraseSettings } from "@/components/family-phrase-settings";
 import { SyncSettings } from "@/components/sync-settings";
 import { TaxPots } from "@/components/tax-pots";
 import { runScheduledEngines } from "@/lib/allowance";
@@ -117,6 +119,10 @@ export default function Home() {
   const [pendingKidId, setPendingKidId] = useState<string | null>(null);
   const [deviceParentId, setDeviceParentId] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
+  // Bumped whenever the Family Phrase changes, so SyncSettings (which loads the Room ID from
+  // storage once on mount) remounts and picks up the newly-derived value instead of showing
+  // what's now a stale room id from before the change.
+  const [roomIdVersion, setRoomIdVersion] = useState(0);
   const [importError, setImportError] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<MarketDataResponse | null>(null);
   const [marketDataLoaded, setMarketDataLoaded] = useState(false);
@@ -220,11 +226,16 @@ export default function Home() {
 
   async function applyMutation(mutation: SyncMutation) {
     if (mutation.type === "snapshot") {
-      // Last-write-wins by timestamp — fine for a handful of family
-      // devices, not a general CRDT merge.
+      // Last-write-wins by timestamp — fine for a handful of family devices, not a general CRDT
+      // merge. But a device that has never held real data yet (e.g. a kid's phone where "Start
+      // fresh" was clicked instead of waiting for the first sync) always has the newest possible
+      // clock stamp — it would otherwise permanently outrank every real snapshot arriving after
+      // it and "Sync now" would look like it does nothing. An empty local state never wins.
       const incoming = normalizeState(mutation.state);
+      const currentIsEmpty = (candidate: FamilyBankState) =>
+        candidate.kids.length === 0 && candidate.transactions.length === 0;
       setState((current) => {
-        if (current && current.updatedAt >= incoming.updatedAt) return current;
+        if (current && !currentIsEmpty(current) && current.updatedAt >= incoming.updatedAt) return current;
         void saveState(incoming);
         return incoming;
       });
@@ -356,6 +367,22 @@ export default function Home() {
     if (cryptoKeyRef.current) startSync(cryptoKeyRef.current, newRoomId);
   }
 
+  /** Parent-only: switches this whole family to a new Family Phrase, re-deriving both the
+   *  encryption key and the room it syncs through, then re-broadcasting this device's current
+   *  data so it becomes the seed for whichever other devices are given the new phrase next. */
+  async function handleChangeFamilyPhrase(newPhrase: string) {
+    const phrase = newPhrase.trim();
+    if (phrase.length < 8) throw new Error("Use a longer Family Phrase (8+ characters) — it's your only encryption key.");
+    const [key, roomId] = await Promise.all([deriveEncryptionKey(phrase), deriveRoomId(phrase)]);
+    syncClientRef.current?.disconnect();
+    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId)]);
+    roomIdRef.current = roomId;
+    cryptoKeyRef.current = key;
+    startSync(key, roomId);
+    setRoomIdVersion((version) => version + 1);
+    if (state) await broadcastSnapshot(state);
+  }
+
   const activeCelebration =
     deviceRole === "kid" && deviceKidId
       ? (celebrations.find((event) => event.kidId === deviceKidId) ?? null)
@@ -381,14 +408,17 @@ export default function Home() {
             This unlocks this device and is never sent anywhere. If this is a new device, it&apos;ll
             wait for the first sync — or you can import a backup JSON file after continuing.
           </p>
-          <input
-            type="password"
+          <RevealInput
             value={phraseInput}
-            onChange={(event) => setPhraseInput(event.target.value)}
+            onChange={setPhraseInput}
             placeholder="Family Phrase"
-            className="w-full rounded-md border border-black/20 px-3 py-2 dark:border-white/20 dark:bg-transparent"
+            className="rounded-md border border-black/20 py-2 pl-3 dark:border-white/20 dark:bg-transparent"
             autoFocus
           />
+          <p className="text-xs opacity-60">
+            A typo here lands silently on a different, empty family instead of an error — tap 👁️
+            to double-check what you typed before continuing.
+          </p>
           {phraseError && <p className="text-sm text-red-500">{phraseError}</p>}
           <button
             type="submit"
@@ -640,7 +670,8 @@ export default function Home() {
 
               {settingsSection === "app" && (
                 <>
-                  <SyncSettings onSave={handleChangeRoomId} />
+                  <FamilyPhraseSettings state={state} onChangePhrase={handleChangeFamilyPhrase} />
+                  <SyncSettings key={roomIdVersion} onSave={handleChangeRoomId} />
                   <MarketDataSettings marketData={marketData} onMarketDataRefreshed={setMarketData} />
                   <section className="flex flex-wrap items-center gap-3">
                     <button

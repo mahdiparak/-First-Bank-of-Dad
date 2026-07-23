@@ -65,6 +65,8 @@ export function SyncSettings({ onSave }: { onSave: (roomId: string) => void }) {
         Devices only sync with each other when they&apos;re in the same room. This defaults to a
         value derived from your Family Phrase, but you can override it — e.g. to deliberately run
         separate sync groups. Every device that should sync together needs this exact same value.
+        Just want an easier phrase for everyone to type? Use Family Phrase above instead — this
+        field alone won&apos;t change your encryption key.
       </p>
       {current && (
         <p className="break-all text-xs opacity-60">
