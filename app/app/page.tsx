@@ -235,14 +235,14 @@ export default function Home() {
       onStatusChange: (status) => {
         setSyncStatus(status);
         // The relay never replays history, so joining a room tells you nothing about whether
-        // anyone else is already there with real data. On every fresh connection, either hand
-        // over what we have (so a peer that's been waiting gets it immediately) or ask for it
-        // (so we don't just sit "Synced" but silent if we're the empty one).
+        // anyone else is already there with real data — and this device may itself have missed
+        // broadcasts while it was disconnected (e.g. backgrounded). On every fresh connection,
+        // hand over what we have (so a peer that's been waiting gets it immediately) AND ask for
+        // theirs (so this device catches up too, whether it started empty or just went stale).
         if (status === "open") {
           const mine = stateRef.current;
-          if (mine && !isEmptyState(mine)) {
-            void broadcastSnapshot(mine);
-          } else if (deviceIdRef.current) {
+          if (mine && !isEmptyState(mine)) void broadcastSnapshot(mine);
+          if (deviceIdRef.current) {
             void syncClientRef.current?.send({
               type: "request-snapshot",
               deviceId: deviceIdRef.current,

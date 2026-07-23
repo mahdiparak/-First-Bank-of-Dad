@@ -4,10 +4,10 @@ import type { FamilyBankState } from "./schema";
 export type SyncMutation =
   | { type: "snapshot"; state: FamilyBankState; deviceId: string; sentAt: string }
   | { type: "delta"; patch: Partial<FamilyBankState>; deviceId: string; sentAt: string }
-  // Sent by a device with no real data yet (e.g. just onboarded) right after it connects, since
-  // the relay never replays history — without this, a device that joins after everyone else is
-  // already idle and connected would just sit there "synced" but silent forever. Any peer holding
-  // real data answers with a fresh "snapshot" broadcast.
+  // Sent by every device right after it (re)connects, since the relay never replays history —
+  // without this, a device that was disconnected when a change went out (backgrounded, briefly
+  // offline, or just onboarding) has no way to learn about it other than someone happening to
+  // send another change later. Any peer holding real data answers with a fresh "snapshot" broadcast.
   | { type: "request-snapshot"; deviceId: string; sentAt: string };
 
 export type SyncStatus = "connecting" | "open" | "closed" | "error";
