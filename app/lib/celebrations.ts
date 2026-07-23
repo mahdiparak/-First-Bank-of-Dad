@@ -38,17 +38,20 @@ export function diffCelebrations(prev: FamilyBankState | null, next: FamilyBankS
       .filter((transaction) => transaction.source === "allowance")
       .reduce((total, transaction) => total + transaction.amount, 0);
     if (allowanceTotal > 0) {
-      const taxRate = next.parentSettings.taxRate;
-      const gross = taxRate < 1 ? round2(allowanceTotal / (1 - taxRate)) : allowanceTotal;
+      // The allowance transaction is the gross amount; the Family Tax withholding is its own
+      // (negative) "tax" transaction recorded alongside it — no need to back-compute either figure.
+      const taxWithheld = -mine
+        .filter((transaction) => transaction.source === "tax" && transaction.amount < 0)
+        .reduce((total, transaction) => total + transaction.amount, 0);
       events.push({
         id: crypto.randomUUID(),
         kidId: kid.id,
         kind: "payday",
         title: "PAYDAY!",
         emoji: "💰",
-        amount: allowanceTotal,
-        gross,
-        tax: round2(gross - allowanceTotal),
+        amount: round2(allowanceTotal - taxWithheld),
+        gross: allowanceTotal,
+        tax: taxWithheld,
       });
     }
 
