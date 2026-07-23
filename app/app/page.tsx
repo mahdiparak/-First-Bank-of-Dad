@@ -131,6 +131,8 @@ export default function Home() {
   // what's now a stale room id from before the change.
   const [roomIdVersion, setRoomIdVersion] = useState(0);
   const [importError, setImportError] = useState<string | null>(null);
+  const [syncNowBusy, setSyncNowBusy] = useState(false);
+  const [syncNowMessage, setSyncNowMessage] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<MarketDataResponse | null>(null);
   const [marketDataLoaded, setMarketDataLoaded] = useState(false);
   const [celebrations, setCelebrations] = useState<CelebrationEvent[]>([]);
@@ -355,6 +357,28 @@ export default function Home() {
       deviceId: deviceIdRef.current,
       sentAt: new Date().toISOString(),
     });
+  }
+
+  /** The "Sync now" button gives no feedback on its own — SyncClient.send() silently no-ops if
+   *  the socket isn't open, and there's no ack from the blind relay either way. This makes both
+   *  outcomes visible: an honest "not connected" when there's nowhere to send it, and a "sent"
+   *  confirmation (not a delivery guarantee — the relay never acks) otherwise. */
+  async function handleSyncNow() {
+    setSyncNowMessage(null);
+    if (!state) return;
+    if (syncStatus !== "open") {
+      setSyncNowMessage("Not connected right now — check your internet connection and try again.");
+      return;
+    }
+    setSyncNowBusy(true);
+    try {
+      await broadcastSnapshot(state);
+      setSyncNowMessage(`Sent at ${new Date().toLocaleTimeString()} — any other device on the same Family Phrase that's online now will pick it up within seconds.`);
+    } catch (error) {
+      setSyncNowMessage(error instanceof Error ? error.message : "Something went wrong.");
+    } finally {
+      setSyncNowBusy(false);
+    }
   }
 
   function handleAddKid(values: AddKidFormValues) {
@@ -717,12 +741,14 @@ export default function Home() {
                       <input type="file" accept="application/json" className="hidden" onChange={handleImport} />
                     </label>
                     <button
-                      onClick={() => void broadcastSnapshot(state)}
-                      className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
+                      onClick={() => void handleSyncNow()}
+                      disabled={syncNowBusy}
+                      className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
                     >
-                      Sync now
+                      {syncNowBusy ? "Syncing…" : "Sync now"}
                     </button>
                   </section>
+                  {syncNowMessage && <p className="text-xs opacity-70">{syncNowMessage}</p>}
                   {importError && <p className="text-sm text-red-500">{importError}</p>}
                 </>
               )}
