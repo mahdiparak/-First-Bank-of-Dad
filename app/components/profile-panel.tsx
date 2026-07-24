@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { notificationPermission, requestNotificationPermission } from "@/lib/push-notifications";
 import { kidAvatar, parentAvatar, type FamilyBankState } from "@/lib/schema";
+import { usePwaInstall } from "@/lib/use-pwa-install";
 import { ParentLoginPrompt } from "./role-gate";
 import { ReconnectPanel } from "./reconnect-panel";
 
@@ -71,6 +72,8 @@ export function ProfilePanel({
               Close
             </button>
           </div>
+
+          <InstallAppButton />
 
           {role === "parent" ? (
             <div className="space-y-3">
@@ -177,5 +180,59 @@ function NotificationToggle({
     >
       {promptText}
     </button>
+  );
+}
+
+/**
+ * Always-available way to install the app, independent of the top InstallBanner — a dismissed
+ * banner is permanently gone on that device by design, and the browser's own native install
+ * prompt can be slow to appear (or never appears at all on iOS). Hidden once already installed.
+ */
+function InstallAppButton() {
+  const { installed, isIOS, canPromptNatively, promptInstall } = usePwaInstall();
+  const [showInstructions, setShowInstructions] = useState(false);
+
+  if (installed) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => (canPromptNatively ? void promptInstall() : setShowInstructions(true))}
+        className="w-full rounded-md border border-black/20 px-3 py-2 text-left text-sm dark:border-white/20"
+      >
+        📲 Install app
+      </button>
+      {showInstructions && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
+          onClick={() => setShowInstructions(false)}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-sm space-y-2 rounded-xl border border-black/10 bg-white p-4 text-sm leading-relaxed text-black shadow-xl dark:border-white/10 dark:bg-neutral-900 dark:text-white"
+          >
+            {isIOS ? (
+              <p>
+                Tap the <strong>Share</strong> icon in Safari, then choose{" "}
+                <strong>&quot;Add to Home Screen.&quot;</strong>
+              </p>
+            ) : (
+              <p>
+                Open your browser menu and choose <strong>&quot;Add to Home screen&quot;</strong> or{" "}
+                <strong>&quot;Install app.&quot;</strong>
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowInstructions(false)}
+              className="mt-2 w-full rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
