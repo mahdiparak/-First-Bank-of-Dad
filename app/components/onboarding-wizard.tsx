@@ -151,7 +151,15 @@ function RestoreFlow({
           <RevealInput value={phrase} onChange={setPhrase} placeholder="Family Phrase" className={inputClass} />
         </Labeled>
         <Labeled label="Family room name">
-          <input value={roomName} onChange={(e) => setRoomName(e.target.value)} className={inputClass} placeholder="e.g. Smith Family" />
+          <input
+            value={roomName}
+            onChange={(e) => setRoomName(e.target.value)}
+            className={inputClass}
+            placeholder="e.g. Smith Family"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
         </Labeled>
         <p className="text-xs opacity-60">
           Use the same phrase and room name as your other devices to sync with them, or set new ones
@@ -320,7 +328,15 @@ function CreateFamilyFlow({ onBack, onFinish }: { onBack: () => void; onFinish: 
             <RevealInput value={phraseConfirm} onChange={setPhraseConfirm} placeholder="Confirm Family Phrase" className={inputClass} />
           </Labeled>
           <Labeled label="Family room name">
-            <input value={roomName} onChange={(e) => setRoomName(e.target.value)} className={inputClass} placeholder="e.g. Smith Family" />
+            <input
+            value={roomName}
+            onChange={(e) => setRoomName(e.target.value)}
+            className={inputClass}
+            placeholder="e.g. Smith Family"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
             <p className="text-xs opacity-60">
               An easy name your family types to find each other. Kids will need this <em>and</em> the
               Family Phrase to join.
@@ -542,7 +558,15 @@ function JoinFlow({ onBack, onFinish }: { onBack: () => void; onFinish: (result:
             <RevealInput value={phrase} onChange={setPhrase} placeholder="Family Phrase" className={inputClass} autoFocus />
           </Labeled>
           <Labeled label="Family room name">
-            <input value={roomName} onChange={(e) => setRoomName(e.target.value)} className={inputClass} placeholder="e.g. Smith Family" />
+            <input
+            value={roomName}
+            onChange={(e) => setRoomName(e.target.value)}
+            className={inputClass}
+            placeholder="e.g. Smith Family"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
           </Labeled>
           <p className="text-xs opacity-60">
             A parent will need to approve you before your device fills with the family&apos;s data.

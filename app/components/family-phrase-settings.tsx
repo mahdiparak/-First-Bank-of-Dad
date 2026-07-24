@@ -152,6 +152,9 @@ export function FamilyPhraseSettings({
             value={roomName}
             onChange={(event) => setRoomName(event.target.value)}
             placeholder="Family room name"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             className="w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent"
           />
           <button
@@ -190,6 +193,10 @@ function RevealInputWithGatedEye({
         onChange={(event) => onChange(event.target.value)}
         type={visible ? "text" : "password"}
         placeholder={placeholder}
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        autoComplete="off"
         className="w-full rounded-md border border-black/20 px-3 py-2 pr-9 text-sm dark:border-white/20 dark:bg-transparent"
       />
       <button

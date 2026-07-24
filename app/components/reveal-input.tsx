@@ -26,6 +26,14 @@ export function RevealInput({
         type={visible ? "text" : "password"}
         placeholder={placeholder}
         autoFocus={autoFocus}
+        // A Family Phrase is case-sensitive and exact-match-only — a phone keyboard silently
+        // auto-capitalizing the first letter or "correcting" a made-up word to a dictionary one
+        // would make two people typing the "same" phrase land on two different encryption keys,
+        // with no error (see lib/crypto.ts). Kill every mobile keyboard behavior that could alter it.
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        autoComplete="off"
         className={`w-full pr-9 ${className}`}
       />
       <button

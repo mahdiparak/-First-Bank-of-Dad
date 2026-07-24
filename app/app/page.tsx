@@ -758,6 +758,31 @@ export default function Home() {
     if (state) await broadcastSnapshot(state);
   }
 
+  /**
+   * Re-points THIS device at a different Family Phrase + room, available to a kid device or a
+   * second parent device (unlike handleChangeFamilyPhrase, which only a parent's Settings tab can
+   * reach). Fixes the case where a device missed a phrase/room change while it was closed or
+   * offline and has no other way back in — this device's local identity (role, PIN, kid/parent
+   * selection) is left completely alone; only what it syncs to changes. Connecting triggers the
+   * same catch-up startSync already does on every open (broadcast-if-non-empty + request-snapshot).
+   */
+  async function handleReconnect(newPhrase: string, newRoomName: string) {
+    const phrase = newPhrase.trim();
+    const roomName = newRoomName.trim();
+    if (phrase.length < 8) throw new Error("Enter the full Family Phrase (8+ characters).");
+    if (!roomName) throw new Error("Enter the family room name too.");
+    const [key, roomId] = await Promise.all([
+      deriveEncryptionKey(phrase),
+      deriveRoomIdFromPhraseAndName(phrase, roomName),
+    ]);
+    syncClientRef.current?.disconnect();
+    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId), saveRoomName(roomName)]);
+    roomIdRef.current = roomId;
+    cryptoKeyRef.current = key;
+    startSync(key, roomId);
+    setRoomIdVersion((version) => version + 1);
+  }
+
   const activeCelebration =
     deviceRole === "kid" && deviceKidId
       ? (celebrations.find((event) => event.kidId === deviceKidId) ?? null)
@@ -844,6 +869,7 @@ export default function Home() {
                 deviceKidId={deviceKidId}
                 onSetDeviceParentId={handleSetDeviceParentId}
                 onSwitchToParent={handleChooseParentRole}
+                onReconnect={handleReconnect}
               />
             </div>
           </header>
@@ -906,6 +932,7 @@ export default function Home() {
                 deviceKidId={deviceKidId}
                 onSetDeviceParentId={handleSetDeviceParentId}
                 onSwitchToParent={handleChooseParentRole}
+                onReconnect={handleReconnect}
               />
             )}
           </div>

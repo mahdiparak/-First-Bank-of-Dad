@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { notificationPermission, requestNotificationPermission } from "@/lib/push-notifications";
 import { kidAvatar, parentAvatar, type FamilyBankState } from "@/lib/schema";
 import { ParentLoginPrompt } from "./role-gate";
+import { ReconnectPanel } from "./reconnect-panel";
 
 /**
  * The top-right identity chip. Deliberately identity-only — who is using this device, and (from
@@ -17,6 +18,7 @@ export function ProfilePanel({
   deviceKidId,
   onSetDeviceParentId,
   onSwitchToParent,
+  onReconnect,
 }: {
   state: FamilyBankState;
   role: "parent" | "kid";
@@ -24,6 +26,11 @@ export function ProfilePanel({
   deviceKidId: string | null;
   onSetDeviceParentId: (parentId: string) => void;
   onSwitchToParent: (parentId?: string) => void;
+  /** Re-point THIS device at a different Family Phrase + room without touching its local
+   *  identity — the fix for a device that's stuck on a stale/wrong room (e.g. missed a phrase
+   *  change while offline). Available to both roles since only a parent's Settings tab has the
+   *  full "change phrase" flow, but any device can need to reconnect. */
+  onReconnect: (phrase: string, roomName: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [switchingToParent, setSwitchingToParent] = useState(false);
@@ -94,6 +101,7 @@ export function ProfilePanel({
                 promptText="🔔 Get notified when a kid claims a quest"
                 deniedText="🔕 Notifications are blocked — turn them on for this site in your browser settings to get nudged when a kid claims a quest."
               />
+              <ReconnectPanel onReconnect={onReconnect} />
             </div>
           ) : (
             <div className="space-y-2">
@@ -118,6 +126,7 @@ export function ProfilePanel({
                   Switch to Parent
                 </button>
               )}
+              <ReconnectPanel onReconnect={onReconnect} />
             </div>
           )}
         </div>
