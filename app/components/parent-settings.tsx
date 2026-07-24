@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { setDadMatchMilestones, updateParentSettings } from "@/lib/mutations";
-import type { FamilyBankState } from "@/lib/schema";
+import { DEFAULT_INVESTMENT_MIN_HOLD_DAYS, type FamilyBankState } from "@/lib/schema";
 import { InfoTooltip } from "./info-tooltip";
 
 const inputClass =
@@ -20,6 +20,7 @@ export function ParentSettingsPanel({
   const [hysaApr, setHysaApr] = useState(String(toPercent(settings.hysaApr)));
   const [cdApr, setCdApr] = useState(String(toPercent(settings.cdApr)));
   const [taxRate, setTaxRate] = useState(String(toPercent(settings.taxRate)));
+  const [minHold, setMinHold] = useState(String(settings.investmentMinHoldDays ?? DEFAULT_INVESTMENT_MIN_HOLD_DAYS));
   const [milestoneWeeks, setMilestoneWeeks] = useState("");
   const [milestoneBonus, setMilestoneBonus] = useState("");
 
@@ -30,6 +31,7 @@ export function ParentSettingsPanel({
         hysaApr: Number(hysaApr) / 100,
         cdApr: Number(cdApr) / 100,
         taxRate: Number(taxRate) / 100,
+        investmentMinHoldDays: Math.max(0, Math.round(Number(minHold) || 0)),
       }),
     );
   }
@@ -76,6 +78,11 @@ export function ParentSettingsPanel({
               the kid&apos;s Tax Pot (in the 🏦 Money tab), paid back later as a &quot;refund&quot;
               — a hands-on lesson in how taxes work.
             </p>
+            <p>
+              <strong>Invest hold (days):</strong> the shortest time a kid must leave any investment
+              in before cashing it out — so money can&apos;t be invested and instantly pulled back.
+              Set to 0 to allow cashing out anytime.
+            </p>
           </InfoTooltip>
         </div>
         <form onSubmit={handleSaveRates} className="flex flex-wrap items-end gap-3">
@@ -87,6 +94,9 @@ export function ParentSettingsPanel({
           </Field>
           <Field label="Family Tax %">
             <input value={taxRate} onChange={(e) => setTaxRate(e.target.value)} type="number" step="0.01" className={`${inputClass} w-24`} />
+          </Field>
+          <Field label="Invest hold (days)">
+            <input value={minHold} onChange={(e) => setMinHold(e.target.value)} type="number" min={0} step="1" className={`${inputClass} w-24`} />
           </Field>
           <button type="submit" className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">
             Save rates

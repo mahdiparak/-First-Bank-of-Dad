@@ -274,9 +274,15 @@ export interface ParentSettings {
   cdApr: number;
   taxRate: number;
   dadMatchMilestones: DadMatchMilestone[];
+  /** Minimum days a kid must hold ANY investment before cashing it out — stops "invest then instantly
+   *  take it back" and teaches that money put to work is committed for a while. 0 disables it. */
+  investmentMinHoldDays: number;
   /** SHA-256 hash gating Kid View -> Parent Command Center. Unset = no gate. */
   parentPinHash?: string;
 }
+
+/** Default minimum investment hold, used for new families and backfilled onto older ones. */
+export const DEFAULT_INVESTMENT_MIN_HOLD_DAYS = 7;
 
 export interface FamilyBankState {
   version: number;
@@ -322,11 +328,15 @@ export function normalizeState(state: FamilyBankState): FamilyBankState {
   const needsAuditLog = !Array.isArray(legacy.auditLog);
   const needsEnvelopes = !Array.isArray(legacy.envelopes);
   const needsTaxPotTotals = (legacy.taxPots ?? []).some((pot) => typeof (pot as TaxPot).totalPaid !== "number");
-  if (!needsReconciliationFix && !needsParentProfiles && !needsAuditLog && !needsEnvelopes && !needsTaxPotTotals) return state;
+  const needsMinHold = typeof state.parentSettings.investmentMinHoldDays !== "number";
+  if (!needsReconciliationFix && !needsParentProfiles && !needsAuditLog && !needsEnvelopes && !needsTaxPotTotals && !needsMinHold) return state;
 
   return {
     ...state,
     parentProfiles: needsParentProfiles ? [] : state.parentProfiles,
+    parentSettings: needsMinHold
+      ? { ...state.parentSettings, investmentMinHoldDays: DEFAULT_INVESTMENT_MIN_HOLD_DAYS }
+      : state.parentSettings,
     reconciliation: needsReconciliationFix
       ? { actualHysaBalances: [], cashAdjustments: legacy.reconciliation?.cashAdjustments ?? [] }
       : state.reconciliation,
@@ -370,6 +380,7 @@ export function createEmptyState(familyId: string): FamilyBankState {
       hysaApr: 0.036,
       cdApr: 0.045,
       taxRate: 0.05,
+      investmentMinHoldDays: DEFAULT_INVESTMENT_MIN_HOLD_DAYS,
       dadMatchMilestones: [
         { weeks: 4, bonus: 5 },
         { weeks: 8, bonus: 10 },

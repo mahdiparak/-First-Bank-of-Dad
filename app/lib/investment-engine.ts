@@ -29,23 +29,41 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-function seededSample(seedKey: string, historicalReturns: number[]): number {
-  if (historicalReturns.length === 0) return 0;
-  const rand = mulberry32(hashSeed(seedKey))();
-  const index = Math.min(Math.floor(rand * historicalReturns.length), historicalReturns.length - 1);
-  return historicalReturns[index];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function startOfDayUTC(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
-function startOfMonthUTC(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+function dayKey(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
-function addMonthsUTC(date: Date, months: number): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1));
+/**
+ * Mean and standard deviation of a set of monthly returns, converted to a per-calendar-day basis
+ * (drift ÷30, volatility ÷√30) so a daily walk aggregates back to roughly the historical monthly
+ * behaviour.
+ */
+function dailyStatsFromMonthly(monthly: number[]): { mean: number; std: number } {
+  if (monthly.length === 0) return { mean: 0, std: 0 };
+  const mean = monthly.reduce((sum, value) => sum + value, 0) / monthly.length;
+  const variance = monthly.reduce((sum, value) => sum + (value - mean) ** 2, 0) / monthly.length;
+  return { mean: mean / 30, std: Math.sqrt(variance) / Math.sqrt(30) };
 }
 
-function monthKey(date: Date): string {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+/**
+ * One calendar day's seeded return, drawn from normal(mean, std) via Box–Muller. Seeded ONLY by
+ * the asset class and the absolute calendar day — never the position id — so every position of an
+ * asset rides one shared market path. That's what stops a kid re-rolling a bad day by cashing out
+ * and reinvesting under a fresh position: the dice for a given day are already cast, for everyone.
+ */
+function seededDailyReturn(assetClass: "stocks" | "crypto", date: Date, mean: number, std: number): number {
+  const rand = mulberry32(hashSeed(`${assetClass}:${dayKey(date)}`));
+  const u1 = Math.max(rand(), 1e-9);
+  const u2 = rand();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  // Keep a single day sane even for crypto — no −100% wipeouts or absurd moonshots in 24h.
+  return Math.max(-0.4, Math.min(0.4, mean + std * z));
 }
 
 /** Fixed-rate compounding (Savings/CD) — pure function of elapsed time, safe to recompute anywhere. */
@@ -57,27 +75,26 @@ export function computeFixedRateValue(position: InvestmentPosition, apr: number,
   return round2(position.principal * Math.pow(1 + apr / 52, weeksElapsed));
 }
 
-/** Advances a Stocks/Crypto position by one seeded historical return per fully-completed calendar month. */
-export function applyInvestmentGrowth(
-  position: InvestmentPosition,
-  historicalReturns: number[],
-  now: Date,
-): InvestmentPosition {
-  let value = position.currentValue;
-  let appliedThrough = startOfMonthUTC(new Date(position.lastGrowthUpdateAt));
-  let nextMonthStart = addMonthsUTC(appliedThrough, 1);
-  let changed = false;
+/**
+ * Stocks/Crypto value as a pure function of elapsed time: a deterministic daily random walk
+ * compounding from the principal at open, one seeded return per calendar day. Recomputed each run
+ * (not accumulated in place), so it visibly moves day to day, every device agrees on it, and — with
+ * the calendar-day, market-wide seed — cashing out and reinvesting can't shake a different outcome.
+ */
+export function computeMarketValue(position: InvestmentPosition, historicalReturns: number[], now: Date): number {
+  const assetClass = position.assetClass === "crypto" ? "crypto" : "stocks";
+  const startDay = startOfDayUTC(new Date(position.openedAt));
+  const daysElapsed = Math.round((startOfDayUTC(now).getTime() - startDay.getTime()) / DAY_MS);
+  if (daysElapsed <= 0) return round2(position.principal);
 
-  while (addMonthsUTC(nextMonthStart, 1) <= now) {
-    const monthReturn = seededSample(`${position.id}:${monthKey(nextMonthStart)}`, historicalReturns);
-    value = value * (1 + monthReturn);
-    appliedThrough = nextMonthStart;
-    nextMonthStart = addMonthsUTC(nextMonthStart, 1);
-    changed = true;
+  const { mean, std } = dailyStatsFromMonthly(historicalReturns);
+  let value = position.principal;
+  for (let day = 1; day <= daysElapsed; day++) {
+    const date = new Date(startDay.getTime() + day * DAY_MS);
+    value *= 1 + seededDailyReturn(assetClass, date, mean, std);
+    if (value < 0.01) return 0.01; // a position can crater, but never to $0 or negative
   }
-
-  if (!changed) return position;
-  return { ...position, currentValue: round2(value), lastGrowthUpdateAt: appliedThrough.toISOString() };
+  return round2(value);
 }
 
 function historicalReturnsFor(assetClass: "stocks" | "crypto", marketData: MarketDataResponse | null): number[] {
@@ -111,9 +128,11 @@ export function runInvestmentEngine(
     }
 
     const returns = position.assetClass === "stocks" ? stockReturns : cryptoReturns;
-    const updated = applyInvestmentGrowth(position, returns, now);
-    if (updated !== position) changed = true;
-    return updated;
+    const value = computeMarketValue(position, returns, now);
+    if (value === position.currentValue) return position;
+    changed = true;
+    // lastGrowthUpdateAt is now just a "last touched" marker — value is a pure function of time.
+    return { ...position, currentValue: value, lastGrowthUpdateAt: now.toISOString() };
   });
 
   if (!changed) return state;

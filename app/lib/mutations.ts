@@ -1,4 +1,4 @@
-import { KID_COLORS, type AssetClass, type AuditActor, type AuditUndo, type DadMatchMilestone, type FamilyBankState, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
+import { KID_COLORS, type AssetClass, type AuditActor, type AuditUndo, type DadMatchMilestone, type FamilyBankState, type InvestmentPosition, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
 
 function touch(state: FamilyBankState): FamilyBankState {
   return { ...state, updatedAt: new Date().toISOString() };
@@ -846,14 +846,33 @@ export function allocateToInvestment(
   });
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The earliest a position may be cashed out — openedAt + the family's minimum-hold days. */
+export function investmentUnlockAt(position: InvestmentPosition, minHoldDays: number): Date {
+  return new Date(new Date(position.openedAt).getTime() + Math.max(0, minHoldDays) * DAY_MS);
+}
+
+/** Whether a position has cleared its minimum hold and can be cashed out. */
+export function canCashOutInvestment(position: InvestmentPosition, minHoldDays: number, now: Date = new Date()): boolean {
+  return now.getTime() >= investmentUnlockAt(position, minHoldDays).getTime();
+}
+
 /**
- * Cashes out an investment position back into spendable balance. A CD withdrawn before its
- * maturity date forfeits any gains beyond the original principal — the "penalty for early
- * withdrawal" the CD trades its higher rate for.
+ * Cashes out an investment position back into spendable balance. Two guards protect the lesson:
+ * a family-wide minimum hold (so money can't be invested and yanked back the same moment), and —
+ * for a CD withdrawn before maturity — forfeiting any gains beyond the original principal, the
+ * "penalty for early withdrawal" the CD trades its higher rate for.
  */
 export function withdrawFromInvestment(state: FamilyBankState, positionId: string, actor: AuditActor): FamilyBankState {
   const position = state.investments.find((candidate) => candidate.id === positionId);
   if (!position || position.closedAt) throw new Error("Investment not found.");
+
+  const minHoldDays = state.parentSettings.investmentMinHoldDays ?? 0;
+  if (!canCashOutInvestment(position, minHoldDays)) {
+    const unlockDate = investmentUnlockAt(position, minHoldDays).toLocaleDateString();
+    throw new Error(`This is still in its ${minHoldDays}-day hold — you can cash it out on ${unlockDate}.`);
+  }
 
   const now = new Date().toISOString();
   const isEarlyCdWithdrawal =

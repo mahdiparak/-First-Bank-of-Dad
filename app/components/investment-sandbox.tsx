@@ -2,7 +2,13 @@
 
 import { useState } from "react";
 import type { MarketDataResponse } from "@/lib/market-data";
-import { allocateToInvestment, availableBalanceForKid, withdrawFromInvestment } from "@/lib/mutations";
+import {
+  allocateToInvestment,
+  availableBalanceForKid,
+  canCashOutInvestment,
+  investmentUnlockAt,
+  withdrawFromInvestment,
+} from "@/lib/mutations";
 import { ASSET_CLASSES, type AssetClass, type AuditActor, type FamilyBankState, type InvestmentPosition, type KidProfile } from "@/lib/schema";
 import { WhatIfSimulator } from "./whatif-simulator";
 
@@ -79,7 +85,9 @@ function AssetClassCard({
   const [amount, setAmount] = useState("");
   const [lockWeeks, setLockWeeks] = useState("12");
   const meta = ASSET_CLASSES[assetClass];
+  const minHoldDays = state.parentSettings.investmentMinHoldDays ?? 0;
   const total = positions.reduce((sum, position) => sum + position.currentValue, 0);
+  const totalPrincipal = positions.reduce((sum, position) => sum + position.principal, 0);
 
   function handleInvest(event: React.FormEvent) {
     event.preventDefault();
@@ -106,23 +114,40 @@ function AssetClassCard({
           {assetClass === "savings" && <p className="text-xs opacity-60">{formatPercent(state.parentSettings.hysaApr)} APR</p>}
           {assetClass === "cd" && <p className="text-xs opacity-60">{formatPercent(state.parentSettings.cdApr)} APR</p>}
         </div>
-        <p className="text-lg font-semibold">{formatCurrency(total)}</p>
+        <div className="text-right">
+          <p className="text-lg font-semibold">{formatCurrency(total)}</p>
+          {positions.length > 0 && <Delta principal={totalPrincipal} value={total} />}
+        </div>
       </div>
 
-      {positions.map((position) => (
-        <div key={position.id} className="flex items-center justify-between text-xs opacity-80">
-          <span>
-            {formatCurrency(position.currentValue)}
-            {position.assetClass === "cd" && position.maturesAt && ` (matures ${new Date(position.maturesAt).toLocaleDateString()})`}
-          </span>
-          <button
-            onClick={() => onMutate((s) => withdrawFromInvestment(s, position.id, actor))}
-            className="rounded-md border border-black/20 px-2 py-1 dark:border-white/20"
-          >
-            Cash out
-          </button>
-        </div>
-      ))}
+      {positions.map((position) => {
+        const unlocked = canCashOutInvestment(position, minHoldDays);
+        return (
+          <div key={position.id} className="flex items-center justify-between gap-2 text-xs">
+            <div className="min-w-0">
+              <span className="opacity-80">
+                {formatCurrency(position.principal)} → <strong>{formatCurrency(position.currentValue)}</strong>
+              </span>{" "}
+              <Delta principal={position.principal} value={position.currentValue} inline />
+              {position.assetClass === "cd" && position.maturesAt && (
+                <span className="opacity-60"> · matures {new Date(position.maturesAt).toLocaleDateString()}</span>
+              )}
+            </div>
+            {unlocked ? (
+              <button
+                onClick={() => onMutate((s) => withdrawFromInvestment(s, position.id, actor))}
+                className="shrink-0 rounded-md border border-black/20 px-2 py-1 dark:border-white/20"
+              >
+                Cash out
+              </button>
+            ) : (
+              <span className="shrink-0 whitespace-nowrap rounded-md bg-black/[0.04] px-2 py-1 opacity-60 dark:bg-white/[0.08]">
+                🔒 until {investmentUnlockAt(position, minHoldDays).toLocaleDateString()}
+              </span>
+            )}
+          </div>
+        );
+      })}
 
       <form onSubmit={handleInvest} className="flex flex-wrap gap-2">
         <input
@@ -156,6 +181,19 @@ function AssetClassCard({
       </form>
     </div>
   );
+}
+
+/** Gain/loss vs. what was put in — the "is my money going up or down" signal, in $ and %, with a
+ *  direction arrow and colour. Flat (exactly break-even) reads neutral. */
+function Delta({ principal, value, inline = false }: { principal: number; value: number; inline?: boolean }) {
+  const change = value - principal;
+  const pct = principal > 0 ? (change / principal) * 100 : 0;
+  const up = change > 0.004;
+  const down = change < -0.004;
+  const arrow = up ? "▲" : down ? "▼" : "▬";
+  const color = up ? "text-green-600 dark:text-green-400" : down ? "text-red-500" : "opacity-60";
+  const text = `${arrow} ${change >= 0 ? "+" : "−"}${formatCurrency(Math.abs(change))} (${change >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(1)}%)`;
+  return <span className={`${color} ${inline ? "text-xs" : "text-sm font-medium"}`}>{text}</span>;
 }
 
 function formatCurrency(amount: number): string {
