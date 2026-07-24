@@ -60,14 +60,19 @@ function isValidPin(pin: string): boolean {
 export function OnboardingWizard({
   onCreateFamily,
   onJoin,
+  onRestoreBackup,
 }: {
   onCreateFamily: (result: CreateFamilyResult) => void;
   onJoin: (result: JoinResult) => void;
+  /** Restore a previously-exported backup JSON, securing it under a Family Phrase + room so this
+   *  device is a fully set-up install (not a half-state that bounces back to the wizard). */
+  onRestoreBackup: (file: File, phrase: string, roomName: string) => Promise<void>;
 }) {
-  const [mode, setMode] = useState<"welcome" | "create" | "join">("welcome");
+  const [mode, setMode] = useState<"welcome" | "create" | "join" | "restore">("welcome");
 
   if (mode === "create") return <CreateFamilyFlow onBack={() => setMode("welcome")} onFinish={onCreateFamily} />;
   if (mode === "join") return <JoinFlow onBack={() => setMode("welcome")} onFinish={onJoin} />;
+  if (mode === "restore") return <RestoreFlow onBack={() => setMode("welcome")} onFinish={onRestoreBackup} />;
 
   return (
     <Shell title="Welcome to First Bank of Dad 🏦" subtitle="Let's get you set up. This takes a minute.">
@@ -86,6 +91,74 @@ export function OnboardingWizard({
           <span className="block font-semibold">Join my family</span>
           <span className="block text-sm opacity-70">A parent already set things up and gave you the Family Phrase.</span>
         </button>
+        <button onClick={() => setMode("restore")} className="block w-full text-center text-xs opacity-60 underline">
+          Restore from a backup file
+        </button>
+      </div>
+    </Shell>
+  );
+}
+
+function RestoreFlow({
+  onBack,
+  onFinish,
+}: {
+  onBack: () => void;
+  onFinish: (file: File, phrase: string, roomName: string) => Promise<void>;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [phrase, setPhrase] = useState("");
+  const [roomName, setRoomName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function handleRestore() {
+    if (!file) {
+      setError("Choose your backup file first.");
+      return;
+    }
+    if (phrase.trim().length < 8) {
+      setError("Set a Family Phrase of at least 8 characters to secure this data.");
+      return;
+    }
+    if (!roomName.trim()) {
+      setError("Give your family a room name.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      await onFinish(file, phrase.trim(), roomName.trim());
+    } catch (restoreError) {
+      setError(restoreError instanceof Error ? restoreError.message : "Couldn't restore that backup.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Shell title="Restore from a backup" subtitle="Load a backup file and secure it under a Family Phrase.">
+      <div className="space-y-3">
+        <label className="block cursor-pointer rounded-md border border-dashed border-black/30 px-3 py-3 text-center text-sm dark:border-white/30">
+          {file ? `📄 ${file.name}` : "Choose backup JSON file"}
+          <input
+            type="file"
+            accept="application/json"
+            className="hidden"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+        </label>
+        <Labeled label="Family Phrase (8+ characters)">
+          <RevealInput value={phrase} onChange={setPhrase} placeholder="Family Phrase" className={inputClass} />
+        </Labeled>
+        <Labeled label="Family room name">
+          <input value={roomName} onChange={(e) => setRoomName(e.target.value)} className={inputClass} placeholder="e.g. Smith Family" />
+        </Labeled>
+        <p className="text-xs opacity-60">
+          Use the same phrase and room name as your other devices to sync with them, or set new ones
+          to run this device on its own.
+        </p>
+        {error && <p className="text-sm text-red-500">{error}</p>}
+        <NavButtons onBack={onBack} onNext={() => void handleRestore()} nextLabel="Restore" busy={busy} />
       </div>
     </Shell>
   );

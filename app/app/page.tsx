@@ -129,6 +129,9 @@ export default function Home() {
   const [unlocked, setUnlocked] = useState(true);
   // Parent side: devices asking to join, awaiting this parent's approve/decline.
   const [pendingJoinRequests, setPendingJoinRequests] = useState<JoinRequest[]>([]);
+  // Parent side: names that entered the right phrase/room but aren't on the kids list — surfaced so
+  // the parent knows to add them (the joiner themselves was already told they weren't found).
+  const [unknownJoinNames, setUnknownJoinNames] = useState<string[]>([]);
   // Joining side: shown on the "waiting for a parent to approve" screen if a parent rejects.
   const [joinError, setJoinError] = useState<string | null>(null);
   const [state, setState] = useState<FamilyBankState | null>(null);
@@ -398,8 +401,13 @@ export default function Home() {
         deviceId: deviceIdRef.current ?? "",
         sentAt: new Date().toISOString(),
       });
+      setUnknownJoinNames((list) => (list.includes(request.claimedName) ? list : [...list, request.claimedName]));
       return;
     }
+    // A previously-unknown name that now matches (the parent just added them) shouldn't keep nagging.
+    setUnknownJoinNames((list) =>
+      list.filter((name) => name.trim().toLowerCase() !== request.claimedName.trim().toLowerCase()),
+    );
     setPendingJoinRequests((list) =>
       list.some((existing) => existing.deviceId === request.deviceId) ? list : [...list, request],
     );
@@ -499,6 +507,34 @@ export default function Home() {
     await saveState(result.state);
     // They just set their PIN in the wizard — don't make them re-enter it right away. The lock
     // kicks in on the next cold open (see the boot effect).
+    setUnlocked(true);
+    setPhase("ready");
+    startSync(key, roomId);
+  }
+
+  /** Wizard "Restore from a backup file": import the backup and secure it under a Family Phrase +
+   *  room, so this becomes a fully set-up device (with a key/room the next launch recognizes) that
+   *  can also sync with the family's other devices if the same phrase/room are used. */
+  async function handleRestoreBackup(file: File, phrase: string, roomName: string) {
+    const imported = await importStateFromFile(file); // throws on a bad file; the wizard shows it
+    const [key, roomId] = await Promise.all([
+      deriveEncryptionKey(phrase),
+      deriveRoomIdFromPhraseAndName(phrase, roomName),
+    ]);
+    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId), saveRoomName(roomName)]);
+    roomIdRef.current = roomId;
+    cryptoKeyRef.current = key;
+    await saveOnboardingComplete(true);
+
+    prevStateRef.current = imported;
+    setState(imported);
+    const resolved = await resolveInitialRole(deviceRoleRef.current, imported);
+    deviceRoleRef.current = resolved.role;
+    setDeviceRole(resolved.role);
+    if (resolved.parentId) setDeviceParentId(resolved.parentId);
+    if (resolved.kidId) setDeviceKidId(resolved.kidId);
+    if (resolved.pendingKidId) setPendingKidId(resolved.pendingKidId);
+    // They just actively restored their own backup — open directly; the lock applies on later opens.
     setUnlocked(true);
     setPhase("ready");
     startSync(key, roomId);
@@ -736,7 +772,13 @@ export default function Home() {
   }
 
   if (phase === "onboarding") {
-    return <OnboardingWizard onCreateFamily={handleCreateFamily} onJoin={handleJoin} />;
+    return (
+      <OnboardingWizard
+        onCreateFamily={handleCreateFamily}
+        onJoin={handleJoin}
+        onRestoreBackup={handleRestoreBackup}
+      />
+    );
   }
 
   if (phase === "waiting-approval") {
@@ -876,6 +918,19 @@ export default function Home() {
           onApprove={(request) => void handleApproveJoin(request)}
           onDecline={(request) => void handleDeclineJoin(request)}
         />
+      )}
+
+      {unknownJoinNames.length > 0 && (
+        <section className="space-y-2 rounded-xl border border-black/10 bg-black/[0.03] p-4 text-sm dark:border-white/10 dark:bg-white/[0.06]">
+          <p>
+            <strong>{unknownJoinNames.join(", ")}</strong> entered the right Family Phrase and room but
+            isn&apos;t on your kids list yet, so they couldn&apos;t join. Add them under ⚙️ Settings →
+            👤 Profile, then have them tap &quot;Try again&quot;.
+          </p>
+          <button onClick={() => setUnknownJoinNames([])} className="text-xs opacity-60 underline">
+            Dismiss
+          </button>
+        </section>
       )}
 
       {!state ? (
@@ -1070,6 +1125,16 @@ function CenteredMessage({ text }: { text: string }) {
 
 /** Shown on a joining device between "Request to join" and a parent's decision. */
 function WaitingApproval({ error, onCancel }: { error: string | null; onCancel: () => void }) {
+  // A wrong Family Phrase or room name can't be detected directly — a typo just connects you to a
+  // different, empty room where no parent will ever answer. So after a while, nudge the user to
+  // re-check them rather than letting the spinner run forever with no explanation.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (error) return;
+    const timer = setTimeout(() => setSlow(true), 25_000);
+    return () => clearTimeout(timer);
+  }, [error]);
+
   return (
     <main className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-sm space-y-4 rounded-xl border border-black/10 p-6 text-center dark:border-white/10">
@@ -1093,9 +1158,26 @@ function WaitingApproval({ error, onCancel }: { error: string | null; onCancel: 
               You&apos;re connected. As soon as a parent opens the app and approves you, this device
               fills with your family&apos;s data. You can leave this screen open.
             </p>
-            <button onClick={onCancel} className="text-sm opacity-60 underline">
-              Cancel
-            </button>
+            {slow && (
+              <p className="rounded-md bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                Taking a while? Double-check the Family Phrase and room name with a parent — even a
+                small typo connects you to a different, empty room. Tap &quot;Try again&quot; to
+                re-enter them.
+              </p>
+            )}
+            <div className="flex flex-col gap-2">
+              {slow && (
+                <button
+                  onClick={onCancel}
+                  className="w-full rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
+                >
+                  Try again
+                </button>
+              )}
+              <button onClick={onCancel} className="text-sm opacity-60 underline">
+                Cancel
+              </button>
+            </div>
           </>
         )}
       </div>
