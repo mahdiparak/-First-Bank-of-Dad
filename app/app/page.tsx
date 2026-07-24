@@ -65,10 +65,10 @@ type Phase = "loading" | "onboarding" | "waiting-approval" | "ready";
 type ParentTab = "kids" | "approvals" | "money" | "talk" | "audit" | "settings";
 type SettingsSection = "profile" | "family" | "app";
 
-function primeState(loaded: FamilyBankState | null): FamilyBankState | null {
+function primeState(loaded: FamilyBankState | null, key: CryptoKey): FamilyBankState | null {
   if (!loaded) return null;
   const processed = runScheduledEngines(loaded);
-  if (processed !== loaded) void saveState(processed);
+  if (processed !== loaded) void saveState(key, processed);
   return processed;
 }
 
@@ -143,6 +143,11 @@ export default function Home() {
   const [pendingKidId, setPendingKidId] = useState<string | null>(null);
   const [deviceParentId, setDeviceParentId] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
+  // Sockets (including this device) currently in this room, per the relay's presence message. A
+  // green "open" WebSocket only means THIS device's connection succeeded — it says nothing about
+  // whether anyone else is actually in the same room (a phrase/room typo lands you alone in a
+  // different, empty room with no error). This is what makes that distinguishable in the UI.
+  const [peerCount, setPeerCount] = useState(0);
   // Bumped whenever the Family Phrase changes, so SyncSettings (which loads the Room ID from
   // storage once on mount) remounts and picks up the newly-derived value instead of showing
   // what's now a stale room id from before the change.
@@ -180,11 +185,12 @@ export default function Home() {
 
   useEffect(() => {
     void (async () => {
-      const [key, roomId, storedState, deviceId, role, kidId, parentId, onboardingComplete, pendingJoin] =
+      // loadState needs the CryptoKey (state is encrypted at rest), so it can't join this parallel
+      // batch — it's loaded further down, once we know a key actually exists.
+      const [key, roomId, deviceId, role, kidId, parentId, onboardingComplete, pendingJoin] =
         await Promise.all([
           loadCryptoKey(),
           loadRoomId(),
-          loadState(),
           getOrCreateDeviceId(),
           loadDeviceRole(),
           loadDeviceKidId(),
@@ -223,10 +229,11 @@ export default function Home() {
 
       roomIdRef.current = roomId;
       cryptoKeyRef.current = key;
+      const storedState = await loadState(key);
       // Seed the celebration diff with the raw stored state, so anything the
       // engines pay out on this load (payday, interest, Dad Match) celebrates.
       prevStateRef.current = storedState;
-      const primed = primeState(storedState);
+      const primed = primeState(storedState, key);
       setState(primed);
       let effectiveRole = role;
       let effectiveKidId = kidId;
@@ -300,6 +307,7 @@ export default function Home() {
       relayUrl: RELAY_URL,
       key,
       roomId,
+      onPresenceChange: setPeerCount,
       onStatusChange: (status) => {
         setSyncStatus(status);
         if (status === "open" && awaitingApprovalRef.current) {
@@ -361,6 +369,9 @@ export default function Home() {
       return;
     }
 
+    const key = cryptoKeyRef.current;
+    if (!key) return; // shouldn't happen — this callback only exists while a sync client (which requires a key) is connected
+
     if (mutation.type === "snapshot") {
       // Last-write-wins by timestamp — fine for a handful of family devices, not a general CRDT
       // merge. But a device that has never held real data yet (e.g. a kid's phone where "Start
@@ -370,7 +381,7 @@ export default function Home() {
       const incoming = normalizeState(mutation.state);
       setState((current) => {
         if (current && !isEmptyState(current) && current.updatedAt >= incoming.updatedAt) return current;
-        void saveState(incoming);
+        void saveState(key, incoming);
         return incoming;
       });
     } else if (mutation.type === "request-snapshot") {
@@ -380,7 +391,7 @@ export default function Home() {
       setState((current) => {
         if (!current) return current;
         const merged = { ...current, ...mutation.patch, updatedAt: mutation.sentAt };
-        void saveState(merged);
+        void saveState(key, merged);
         return merged;
       });
     }
@@ -433,7 +444,7 @@ export default function Home() {
       void saveDeviceParentId(mutation.parentId);
     }
 
-    void saveState(incoming);
+    if (cryptoKeyRef.current) void saveState(cryptoKeyRef.current, incoming);
     setState(incoming);
     pendingJoinRef.current = null;
     await savePendingJoin(null);
@@ -504,7 +515,7 @@ export default function Home() {
 
     prevStateRef.current = result.state;
     setState(result.state);
-    await saveState(result.state);
+    await saveState(key, result.state);
     // They just set their PIN in the wizard — don't make them re-enter it right away. The lock
     // kicks in on the next cold open (see the boot effect).
     setUnlocked(true);
@@ -516,11 +527,11 @@ export default function Home() {
    *  room, so this becomes a fully set-up device (with a key/room the next launch recognizes) that
    *  can also sync with the family's other devices if the same phrase/room are used. */
   async function handleRestoreBackup(file: File, phrase: string, roomName: string) {
-    const imported = await importStateFromFile(file); // throws on a bad file; the wizard shows it
     const [key, roomId] = await Promise.all([
       deriveEncryptionKey(phrase),
       deriveRoomIdFromPhraseAndName(phrase, roomName),
     ]);
+    const imported = await importStateFromFile(file, key); // throws on a bad file; the wizard shows it
     await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId), saveRoomName(roomName)]);
     roomIdRef.current = roomId;
     cryptoKeyRef.current = key;
@@ -633,7 +644,8 @@ export default function Home() {
     event.target.value = "";
     if (!file) return;
     try {
-      const imported = await importStateFromFile(file);
+      if (!cryptoKeyRef.current) throw new Error("No encryption key yet — finish setup first.");
+      const imported = await importStateFromFile(file, cryptoKeyRef.current);
       commitState(imported);
       setImportError(null);
       const resolved = await resolveInitialRole(deviceRoleRef.current, imported);
@@ -659,7 +671,7 @@ export default function Home() {
 
   function commitState(newState: FamilyBankState) {
     setState(newState);
-    void saveState(newState);
+    if (cryptoKeyRef.current) void saveState(cryptoKeyRef.current, newState);
     void broadcastSnapshot(newState);
   }
 
@@ -687,7 +699,12 @@ export default function Home() {
     setSyncNowBusy(true);
     try {
       await broadcastSnapshot(state);
-      setSyncNowMessage(`Sent at ${new Date().toLocaleTimeString()} — any other device on the same Family Phrase that's online now will pick it up within seconds.`);
+      const sentAt = `Sent at ${new Date().toLocaleTimeString()}`;
+      setSyncNowMessage(
+        peerCount <= 1
+          ? `${sentAt} — but no other device is in this room right now, so there's no one to receive it. Double-check the Family Phrase and room name match on the other device.`
+          : `${sentAt} — any other device on the same Family Phrase that's online now will pick it up within seconds.`,
+      );
     } catch (error) {
       setSyncNowMessage(error instanceof Error ? error.message : "Something went wrong.");
     } finally {
@@ -861,7 +878,7 @@ export default function Home() {
               {kid ? `${kidAvatar(kid)} ${kid.name}'s Bank` : "First Bank of Dad"}
             </h1>
             <div className="flex items-center gap-3">
-              <SyncBadge status={syncStatus} />
+              <SyncBadge status={syncStatus} peerCount={peerCount} />
               <ProfilePanel
                 state={state}
                 role="kid"
@@ -923,7 +940,7 @@ export default function Home() {
         <header className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">First Bank of Dad</h1>
           <div className="flex items-center gap-3">
-            <SyncBadge status={syncStatus} />
+            <SyncBadge status={syncStatus} peerCount={peerCount} />
             {state && (
               <ProfilePanel
                 state={state}
@@ -1121,10 +1138,26 @@ export default function Home() {
   );
 }
 
-function SyncBadge({ status }: { status: SyncStatus }) {
+/**
+ * A green "connected" WebSocket only proves THIS device's own connection succeeded — it says
+ * nothing about whether anyone else is actually in the same room (a phrase/room typo silently
+ * lands you alone in a different, empty room, with no error). peerCount — from the relay's
+ * presence message — is what actually answers "is this doing anything." status === "open" but
+ * peerCount <= 1 is called out separately so that distinction is visible instead of just "Synced".
+ */
+function SyncBadge({ status, peerCount }: { status: SyncStatus; peerCount: number }) {
+  if (status === "open" && peerCount <= 1) {
+    return (
+      <span className="flex items-center gap-2 text-sm opacity-70" title="Connected to the relay, but no other device is in this room right now.">
+        <span className="h-2 w-2 rounded-full bg-amber-500" />
+        Connected — alone in room
+      </span>
+    );
+  }
+
   const labels: Record<SyncStatus, string> = {
     connecting: "Connecting…",
-    open: "Synced",
+    open: `Synced with ${peerCount - 1} device${peerCount - 1 === 1 ? "" : "s"}`,
     closed: "Offline — saved on this device",
     error: "Offline — saved on this device",
   };

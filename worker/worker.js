@@ -10,6 +10,17 @@ const MAX_MESSAGE_BYTES = 64 * 1024; // one encrypted mutation should be tiny
 const MAX_SOCKETS_PER_ROOM = 8; // parent + kids + a few extra devices
 const ROOM_ID_PATTERN = /^[a-f0-9]{64}$/i; // hex-encoded SHA-256
 
+// Plaintext (never encrypted) system message telling every socket in a room how many devices are
+// currently connected. This is the ONLY thing the Worker ever originates itself rather than just
+// relaying — it's connection metadata (a count), never room content, so it doesn't weaken the
+// "server can't make sense of the data" guarantee: an operator running this Worker can already see
+// how many sockets connect to a given room hash and when, with or without this message existing.
+// Clients use it purely to tell "my socket is open" apart from "I'm actually synced with someone" —
+// see lib/sync.ts's presence handling and the __presence__ marker it looks for.
+function presenceMessage(count) {
+  return JSON.stringify({ __presence__: true, count });
+}
+
 export class Room {
   constructor(state) {
     this.state = state;
@@ -30,6 +41,7 @@ export class Room {
     // messages and still wake it for webSocketMessage/Close/Error, so an
     // idle family doesn't hold any compute or memory.
     this.state.acceptWebSocket(server);
+    this.broadcastPresence();
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -57,6 +69,9 @@ export class Room {
     } catch {
       // Already closed.
     }
+    // Fires after the closing socket is already gone from getWebSockets(), so the remaining
+    // peers get an accurate, immediately-updated count.
+    this.broadcastPresence();
   }
 
   async webSocketError(ws) {
@@ -64,6 +79,18 @@ export class Room {
       ws.close(1011, 'Socket error');
     } catch {
       // Already closed.
+    }
+    this.broadcastPresence();
+  }
+
+  broadcastPresence() {
+    const message = presenceMessage(this.state.getWebSockets().length);
+    for (const peer of this.state.getWebSockets()) {
+      try {
+        peer.send(message);
+      } catch {
+        // Peer socket is dead; it'll be cleaned up via its own close/error.
+      }
     }
   }
 }

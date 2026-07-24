@@ -38,16 +38,46 @@ export type SyncMutation =
 
 export type SyncStatus = "connecting" | "open" | "closed" | "error";
 
+/** The relay's one self-originated (never encrypted) message: how many sockets — including this
+ *  one — are currently connected to this room. See worker/worker.js's presenceMessage(). */
+interface PresenceMessage {
+  __presence__: true;
+  count: number;
+}
+
+function isPresenceMessage(value: unknown): value is PresenceMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { __presence__?: unknown }).__presence__ === true &&
+    typeof (value as { count?: unknown }).count === "number"
+  );
+}
+
 export interface SyncClientOptions {
   relayUrl: string; // e.g. wss://relay.example.workers.dev/ws
   key: CryptoKey;
   roomId: string;
   onMutation: (mutation: SyncMutation) => void;
   onStatusChange?: (status: SyncStatus) => void;
+  /** How many sockets (including this device) are in the room right now — the only reliable way
+   *  to tell "my connection is open" apart from "I'm actually in the same room as anyone else." */
+  onPresenceChange?: (count: number) => void;
 }
 
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
+
+function tryParsePresence(data: string): PresenceMessage | null {
+  // Real ciphertext is base64 (no '{'), so this cheaply rules out the common case before parsing.
+  if (!data.startsWith("{")) return null;
+  try {
+    const parsed: unknown = JSON.parse(data);
+    return isPresenceMessage(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 export class SyncClient {
   private ws: WebSocket | null = null;
@@ -77,6 +107,9 @@ export class SyncClient {
   private open(): void {
     const url = `${this.options.relayUrl}?room=${this.options.roomId}`;
     this.options.onStatusChange?.("connecting");
+    // A stale count from a previous room (e.g. right after reconnecting somewhere new) would be
+    // actively misleading — the fresh count arrives the moment this socket is accepted.
+    this.options.onPresenceChange?.(0);
 
     const ws = new WebSocket(url);
     this.ws = ws;
@@ -92,6 +125,7 @@ export class SyncClient {
 
     ws.addEventListener("close", () => {
       this.options.onStatusChange?.("closed");
+      this.options.onPresenceChange?.(0);
       if (!this.closedByUser) this.scheduleReconnect();
     });
 
@@ -101,6 +135,13 @@ export class SyncClient {
   }
 
   private async handleMessage(data: string): Promise<void> {
+    // The relay's presence message is deliberately plaintext JSON (see worker.js) — check for it
+    // before attempting to decrypt, since it isn't AES-GCM ciphertext and would just fail below.
+    const presence = tryParsePresence(data);
+    if (presence) {
+      this.options.onPresenceChange?.(presence.count);
+      return;
+    }
     try {
       const mutation = await decryptPayload<SyncMutation>(this.options.key, data);
       this.options.onMutation(mutation);

@@ -1,4 +1,5 @@
 import localforage from "localforage";
+import { decryptPayload, encryptPayload } from "./crypto";
 import { normalizeState, type FamilyBankState } from "./schema";
 
 const stateStore = localforage.createInstance({
@@ -33,13 +34,37 @@ const ALPHA_VANTAGE_API_KEY_KEY = "alpha-vantage-api-key";
 
 export type DeviceRole = "parent" | "kid";
 
-export async function loadState(): Promise<FamilyBankState | null> {
-  const state = await stateStore.getItem<FamilyBankState>(STATE_KEY);
-  return state ? normalizeState(state) : null;
+/**
+ * At-rest encryption: the persisted state is stored as ciphertext (AES-GCM, the same
+ * non-extractable key already used for sync — see lib/crypto.ts), not a plain object. This closes
+ * the gap where anything that can read this origin's IndexedDB files directly — a browser
+ * extension with storage permissions, a device-level backup/extraction tool, malware reading the
+ * profile directory — got the whole family's balances and history as plain JSON. It intentionally
+ * does NOT defend against someone with live access to an already-unlocked app/devtools session on
+ * this device; that's what the PIN (see components/app-lock.tsx) gates instead, at the UI layer.
+ *
+ * `key` is required because there's nothing meaningful to load/save without it — every call site
+ * already has the Family-Phrase-derived CryptoKey in hand by the time state exists.
+ */
+export async function loadState(key: CryptoKey): Promise<FamilyBankState | null> {
+  const stored = await stateStore.getItem<string | FamilyBankState>(STATE_KEY);
+  if (!stored) return null;
+  if (typeof stored === "string") {
+    try {
+      return normalizeState(await decryptPayload<FamilyBankState>(key, stored));
+    } catch {
+      return null; // Wrong key for this ciphertext (e.g. a stale key from before a phrase change).
+    }
+  }
+  // Pre-encryption installs stored a plain object here. Adopt it as-is; the very next saveState
+  // call (which normally follows within moments, e.g. via primeState's engines) overwrites it with
+  // ciphertext, so the migration is self-healing with no separate step or flag to track.
+  return normalizeState(stored);
 }
 
-export async function saveState(state: FamilyBankState): Promise<void> {
-  await stateStore.setItem(STATE_KEY, state);
+export async function saveState(key: CryptoKey, state: FamilyBankState): Promise<void> {
+  const ciphertext = await encryptPayload(key, state);
+  await stateStore.setItem(STATE_KEY, ciphertext);
 }
 
 export async function clearState(): Promise<void> {
@@ -245,11 +270,11 @@ function assertLooksLikeFamilyBankState(value: unknown): asserts value is Family
   }
 }
 
-export async function importStateFromFile(file: File): Promise<FamilyBankState> {
+export async function importStateFromFile(file: File, key: CryptoKey): Promise<FamilyBankState> {
   const text = await file.text();
   const parsed: unknown = JSON.parse(text);
   assertLooksLikeFamilyBankState(parsed);
   const normalized = normalizeState(parsed);
-  await saveState(normalized);
+  await saveState(key, normalized);
   return normalized;
 }
