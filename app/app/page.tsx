@@ -43,6 +43,7 @@ import {
   loadPendingJoin,
   loadRoomId,
   loadState,
+  clearFamilyKeyMaterial,
   saveCryptoKey,
   saveDefaultRoomId,
   saveDeviceKidId,
@@ -164,6 +165,9 @@ export default function Home() {
   // still sees the request — the relay never replays history).
   const pendingJoinRef = useRef<PendingJoin | null>(null);
   const joinRequestTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Device ids this (parent) device has already approved, so a joiner's periodic re-announce that
+  // arrives just after approval isn't re-queued as a fresh request.
+  const approvedJoinDeviceIdsRef = useRef<Set<string>>(new Set());
   // Mirrors `state` for use inside the sync callbacks below, which are handed to SyncClient once
   // at connect time and would otherwise close over a stale value from that moment.
   const stateRef = useRef<FamilyBankState | null>(null);
@@ -341,9 +345,18 @@ export default function Home() {
       handleIncomingJoinRequest(mutation);
       return;
     }
-    // Approvals/rejections are only meaningful to the device they target (which handles them in the
-    // awaiting branch above). An established device ignores them.
-    if (mutation.type === "join-approved" || mutation.type === "join-rejected") return;
+    // A verdict from another parent device: the joiner (targetDeviceId) handles its own case in the
+    // awaiting branch above. Here, every established device just drops that request from its own
+    // approval queue so a co-parent's banner doesn't linger after someone else already answered.
+    if (mutation.type === "join-approved") {
+      approvedJoinDeviceIdsRef.current.add(mutation.targetDeviceId);
+      setPendingJoinRequests((list) => list.filter((entry) => entry.deviceId !== mutation.targetDeviceId));
+      return;
+    }
+    if (mutation.type === "join-rejected") {
+      setPendingJoinRequests((list) => list.filter((entry) => entry.deviceId !== mutation.targetDeviceId));
+      return;
+    }
 
     if (mutation.type === "snapshot") {
       // Last-write-wins by timestamp — fine for a handful of family devices, not a general CRDT
@@ -374,6 +387,7 @@ export default function Home() {
    *  (the phrase/room were right, but they're not one of ours); everything else waits for a human. */
   function handleIncomingJoinRequest(request: JoinRequest) {
     if (deviceRoleRef.current !== "parent") return; // only a parent grants access
+    if (approvedJoinDeviceIdsRef.current.has(request.deviceId)) return; // already let this one in
     const mine = stateRef.current;
     if (!mine) return;
     if (request.requestedRole === "kid" && !findKidByName(mine, request.claimedName)) {
@@ -536,6 +550,7 @@ export default function Home() {
       merged = result.state;
       parentId = result.parentId;
     }
+    approvedJoinDeviceIdsRef.current.add(request.deviceId);
     commitState(merged);
     await syncClientRef.current?.send({
       type: "join-approved",
@@ -561,13 +576,18 @@ export default function Home() {
     setPendingJoinRequests((list) => list.filter((entry) => entry.deviceId !== request.deviceId));
   }
 
-  /** Bail out of a pending join (from the waiting screen) back to the wizard. */
+  /** Bail out of a pending join (from the waiting screen) back to the wizard. Clears the derived
+   *  key/room too, so the next launch doesn't mistake this half-finished attempt for a real
+   *  install and drop the user onto the "no local data" screen instead of the wizard. */
   async function handleCancelJoin() {
     awaitingApprovalRef.current = false;
     stopJoinRequestLoop();
     syncClientRef.current?.disconnect();
     pendingJoinRef.current = null;
+    roomIdRef.current = null;
+    cryptoKeyRef.current = null;
     await savePendingJoin(null);
+    await clearFamilyKeyMaterial();
     setJoinError(null);
     setPhase("onboarding");
   }

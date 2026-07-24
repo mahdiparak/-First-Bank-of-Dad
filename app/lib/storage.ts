@@ -90,6 +90,18 @@ export async function forgetFamilyPhraseMaterial(): Promise<void> {
   await keyStore.clear();
 }
 
+/** Clears only the derived Family-Phrase material and room (not the device id or other local
+ *  preferences) — used when a join attempt is abandoned, so the next launch starts clean at the
+ *  wizard instead of looking like a finished install. */
+export async function clearFamilyKeyMaterial(): Promise<void> {
+  await Promise.all([
+    keyStore.removeItem(CRYPTO_KEY_KEY),
+    keyStore.removeItem(ROOM_ID_KEY),
+    keyStore.removeItem(DEFAULT_ROOM_ID_KEY),
+    keyStore.removeItem(ROOM_NAME_KEY),
+  ]);
+}
+
 // This device's role/assigned kid is a local preference, not part of the
 // synced FamilyBankState — different devices in the same family can be in
 // different modes (dad's phone in Parent mode, a kid's tablet locked to
