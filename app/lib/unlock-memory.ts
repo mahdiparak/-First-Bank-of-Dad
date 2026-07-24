@@ -8,11 +8,10 @@ import type { DeviceRole } from "./storage";
 // persists everywhere, and WE decide the boundary instead of the browser silently deciding it for us.
 const UNLOCK_MEMORY_KEY = "app-lock-remembered-unlock";
 
-// How long an unlock is remembered before AppLock asks again regardless of activity. Long enough
-// that normal same-day use (refreshing, backgrounding, reopening the PWA a few times) never
-// re-prompts; short enough that a lost/stolen device doesn't stay open indefinitely just because
-// it was unlocked once.
-const REMEMBER_DURATION_MS = 12 * 60 * 60 * 1000; // 12 hours
+// How long an unlock is remembered before AppLock asks again regardless of activity. Short enough
+// that a lost/stolen device doesn't stay open for long just because it was unlocked once; long
+// enough that refreshing or briefly backgrounding the PWA within the same sitting doesn't re-prompt.
+const REMEMBER_DURATION_MS = 60 * 60 * 1000; // 1 hour
 
 interface StoredUnlock {
   identity: string;
