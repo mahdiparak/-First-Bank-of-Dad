@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { hasKidPinGate, verifyKidPin } from "@/lib/kid-auth";
-import { hasParentPinGate, verifyParentPin } from "@/lib/parent-auth";
+import { useEffect, useState } from "react";
+import { hasKidPinGate, kidPinLockoutStatus, verifyKidPin } from "@/lib/kid-auth";
+import { hasParentPinGate, parentPinLockoutStatus, verifyParentPin } from "@/lib/parent-auth";
 import { kidAvatar, parentAvatar, type FamilyBankState, type KidProfile } from "@/lib/schema";
+import { formatLockoutRemaining, useLockoutCountdown } from "@/lib/use-lockout-countdown";
 
 /** Shown on a device with no locally-remembered role once a Parent PIN already exists elsewhere in the family. */
 export function RoleChooser({
@@ -19,6 +20,9 @@ export function RoleChooser({
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingKid, setPendingKid] = useState<KidProfile | null>(null);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
+  const countdown = useLockoutCountdown(lockoutRemaining);
+  const locked = countdown > 0;
 
   function afterUnlock(parentId?: string) {
     if (parentId) {
@@ -35,17 +39,23 @@ export function RoleChooser({
       afterUnlock();
       return;
     }
+    void parentPinLockoutStatus().then((status) => {
+      if (status.locked) setLockoutRemaining(status.remainingMs);
+    });
     setMode("parent-pin");
   }
 
   async function handlePinSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (locked) return;
     const result = await verifyParentPin(state, pin);
+    setPin("");
     if (result.ok) {
       afterUnlock(result.parentId);
+    } else if (result.lockout?.locked) {
+      setLockoutRemaining(result.lockout.remainingMs);
     } else {
       setError("Wrong PIN.");
-      setPin("");
     }
   }
 
@@ -78,16 +88,26 @@ export function RoleChooser({
         className="w-full max-w-sm space-y-3 rounded-xl border border-black/10 p-6 dark:border-white/10"
       >
         <h1 className="text-lg font-semibold">Enter your Parent PIN</h1>
+        {locked && (
+          <p className="rounded-md bg-red-50 p-3 text-sm text-red-600 dark:bg-red-500/10 dark:text-red-400">
+            Too many wrong attempts — try again in {formatLockoutRemaining(countdown)}.
+          </p>
+        )}
         <input
           type="password"
           inputMode="numeric"
           value={pin}
           onChange={(event) => setPin(event.target.value)}
-          className="w-full rounded-md border border-black/20 px-3 py-2 dark:border-white/20 dark:bg-transparent"
+          disabled={locked}
+          className="w-full rounded-md border border-black/20 px-3 py-2 disabled:opacity-50 dark:border-white/20 dark:bg-transparent"
           autoFocus
         />
         {error && <p className="text-sm text-red-500">{error}</p>}
-        <button type="submit" className="w-full rounded-md bg-black px-3 py-2 text-white dark:bg-white dark:text-black">
+        <button
+          type="submit"
+          disabled={locked}
+          className="w-full rounded-md bg-black px-3 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black"
+        >
           Unlock
         </button>
         <button type="button" onClick={() => setMode("choose")} className="w-full text-sm opacity-70">
@@ -180,15 +200,27 @@ export function KidPinPrompt({
 }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
+  const countdown = useLockoutCountdown(lockoutRemaining);
+  const locked = countdown > 0;
+
+  useEffect(() => {
+    void kidPinLockoutStatus(kid.id).then((status) => {
+      if (status.locked) setLockoutRemaining(status.remainingMs);
+    });
+  }, [kid.id]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const ok = await verifyKidPin(kid, pin);
-    if (ok) {
+    if (locked) return;
+    const result = await verifyKidPin(kid, pin);
+    setPin("");
+    if (result.ok) {
       onSuccess();
+    } else if (result.lockout?.locked) {
+      setLockoutRemaining(result.lockout.remainingMs);
     } else {
       setError("Wrong PIN.");
-      setPin("");
     }
   }
 
@@ -200,16 +232,26 @@ export function KidPinPrompt({
       <h1 className="text-lg font-semibold">
         {kidAvatar(kid)} Enter {kid.name}&apos;s PIN
       </h1>
+      {locked && (
+        <p className="rounded-md bg-red-50 p-3 text-sm text-red-600 dark:bg-red-500/10 dark:text-red-400">
+          Too many wrong attempts — try again in {formatLockoutRemaining(countdown)}.
+        </p>
+      )}
       <input
         type="password"
         inputMode="numeric"
         value={pin}
         onChange={(event) => setPin(event.target.value)}
-        className="w-full rounded-md border border-black/20 px-3 py-2 dark:border-white/20 dark:bg-transparent"
+        disabled={locked}
+        className="w-full rounded-md border border-black/20 px-3 py-2 disabled:opacity-50 dark:border-white/20 dark:bg-transparent"
         autoFocus
       />
       {error && <p className="text-sm text-red-500">{error}</p>}
-      <button type="submit" className="w-full rounded-md bg-black px-3 py-2 text-white dark:bg-white dark:text-black">
+      <button
+        type="submit"
+        disabled={locked}
+        className="w-full rounded-md bg-black px-3 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black"
+      >
         Unlock
       </button>
       <button type="button" onClick={onCancel} className="w-full text-sm opacity-70">
@@ -232,6 +274,17 @@ export function ParentLoginPrompt({
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pickingParent, setPickingParent] = useState(false);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
+  const countdown = useLockoutCountdown(lockoutRemaining);
+  const locked = countdown > 0;
+
+  useEffect(() => {
+    if (!hasParentPinGate(state)) return;
+    void parentPinLockoutStatus().then((status) => {
+      if (status.locked) setLockoutRemaining(status.remainingMs);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function afterUnlock(parentId?: string) {
     if (parentId) {
@@ -249,12 +302,15 @@ export function ParentLoginPrompt({
       afterUnlock();
       return;
     }
+    if (locked) return;
     const result = await verifyParentPin(state, pin);
+    setPin("");
     if (result.ok) {
       afterUnlock(result.parentId);
+    } else if (result.lockout?.locked) {
+      setLockoutRemaining(result.lockout.remainingMs);
     } else {
       setError("Wrong PIN.");
-      setPin("");
     }
   }
 
@@ -283,6 +339,11 @@ export function ParentLoginPrompt({
   return (
     <form onSubmit={handleSubmit} className="w-full space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
       <p className="text-sm font-semibold">Switch to Parent</p>
+      {hasParentPinGate(state) && locked && (
+        <p className="rounded-md bg-red-50 p-3 text-sm text-red-600 dark:bg-red-500/10 dark:text-red-400">
+          Too many wrong attempts — try again in {formatLockoutRemaining(countdown)}.
+        </p>
+      )}
       {hasParentPinGate(state) && (
         <input
           type="password"
@@ -290,7 +351,8 @@ export function ParentLoginPrompt({
           value={pin}
           onChange={(event) => setPin(event.target.value)}
           placeholder="Parent PIN"
-          className="w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent"
+          disabled={locked}
+          className="w-full rounded-md border border-black/20 px-3 py-2 text-sm disabled:opacity-50 dark:border-white/20 dark:bg-transparent"
           autoFocus
         />
       )}
@@ -298,7 +360,8 @@ export function ParentLoginPrompt({
       <div className="flex gap-2">
         <button
           type="submit"
-          className="flex-1 rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
+          disabled={locked}
+          className="flex-1 rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
         >
           {hasParentPinGate(state) ? "Unlock" : "Continue"}
         </button>

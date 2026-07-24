@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { hasParentPinGate, verifyParentPin } from "@/lib/parent-auth";
+import { hasParentPinGate, parentPinLockoutStatus, verifyParentPin } from "@/lib/parent-auth";
 import type { FamilyBankState } from "@/lib/schema";
 import { loadRoomName } from "@/lib/storage";
+import { formatLockoutRemaining, useLockoutCountdown } from "@/lib/use-lockout-countdown";
 import { InfoTooltip } from "./info-tooltip";
 
 /**
@@ -29,6 +30,9 @@ export function FamilyPhraseSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
+  const countdown = useLockoutCountdown(lockoutRemaining);
+  const locked = countdown > 0;
 
   // Prefill the room name with the current one so a parent changing only the phrase keeps their
   // room, and changing only the room name doesn't blank it out.
@@ -48,16 +52,22 @@ export function FamilyPhraseSettings({
       return;
     }
     setPinError(null);
+    void parentPinLockoutStatus().then((status) => {
+      if (status.locked) setLockoutRemaining(status.remainingMs);
+    });
     setPinPrompt(true);
   }
 
   async function handlePinSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (locked) return;
     const result = await verifyParentPin(state, pin);
     setPin("");
     if (result.ok) {
       setVisible(true);
       setPinPrompt(false);
+    } else if (result.lockout?.locked) {
+      setLockoutRemaining(result.lockout.remainingMs);
     } else {
       setPinError("Wrong PIN.");
     }
@@ -120,16 +130,26 @@ export function FamilyPhraseSettings({
 
       {pinPrompt ? (
         <form onSubmit={handlePinSubmit} className="flex flex-wrap items-center gap-2">
+          {locked && (
+            <p className="w-full rounded-md bg-red-50 p-3 text-sm text-red-600 dark:bg-red-500/10 dark:text-red-400">
+              Too many wrong attempts — try again in {formatLockoutRemaining(countdown)}.
+            </p>
+          )}
           <input
             type="password"
             inputMode="numeric"
             value={pin}
             onChange={(event) => setPin(event.target.value)}
             placeholder="Parent PIN"
-            className="rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent"
+            disabled={locked}
+            className="rounded-md border border-black/20 px-3 py-2 text-sm disabled:opacity-50 dark:border-white/20 dark:bg-transparent"
             autoFocus
           />
-          <button type="submit" className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black">
+          <button
+            type="submit"
+            disabled={locked}
+            className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
+          >
             Unlock
           </button>
           <button type="button" onClick={() => setPinPrompt(false)} className="text-xs opacity-60">

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { deriveRoomId, deriveRoomIdFromPhraseAndName } from "@/lib/crypto";
-import { verifyKidPin } from "@/lib/kid-auth";
-import { verifyParentPin } from "@/lib/parent-auth";
+import { kidPinLockoutStatus, verifyKidPin } from "@/lib/kid-auth";
+import { parentPinLockoutStatus, verifyParentPin } from "@/lib/parent-auth";
 import { kidAvatar, parentAvatar, type FamilyBankState } from "@/lib/schema";
 import { loadRoomId, loadRoomName, type DeviceRole } from "@/lib/storage";
+import { formatLockoutRemaining, useLockoutCountdown } from "@/lib/use-lockout-countdown";
 import { RevealInput } from "./reveal-input";
 
 /**
@@ -36,9 +37,22 @@ export function AppLock({
   const [recovering, setRecovering] = useState(false);
   const [phrase, setPhrase] = useState("");
   const [recoverError, setRecoverError] = useState<string | null>(null);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
 
   const kid = deviceRole === "kid" ? (state.kids.find((candidate) => candidate.id === deviceKidId) ?? null) : null;
   const parent = deviceParentId ? (state.parentProfiles.find((candidate) => candidate.id === deviceParentId) ?? null) : null;
+
+  const countdown = useLockoutCountdown(lockoutRemaining);
+  const locked = countdown > 0;
+
+  // Picks up a still-active lockout from an earlier attempt (or from before a page reload) so the
+  // form starts disabled instead of only locking after one more failed try.
+  useEffect(() => {
+    void (kid ? kidPinLockoutStatus(kid.id) : parentPinLockoutStatus()).then((status) => {
+      if (status.locked) setLockoutRemaining(status.remainingMs);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const heading =
     kid !== null
@@ -49,15 +63,18 @@ export function AppLock({
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (locked) return;
     setBusy(true);
     setError(null);
-    const ok = kid ? await verifyKidPin(kid, pin) : (await verifyParentPin(state, pin)).ok;
+    const result = kid ? await verifyKidPin(kid, pin) : await verifyParentPin(state, pin);
     setBusy(false);
-    if (ok) {
+    setPin("");
+    if (result.ok) {
       onUnlock();
+    } else if (result.lockout?.locked) {
+      setLockoutRemaining(result.lockout.remainingMs);
     } else {
       setError("Wrong PIN.");
-      setPin("");
     }
   }
 
@@ -127,20 +144,27 @@ export function AppLock({
       >
         <div className="text-4xl">🔒</div>
         <h1 className="text-lg font-semibold">{heading}</h1>
-        <p className="text-sm opacity-70">Enter your PIN to unlock.</p>
+        {locked ? (
+          <p className="rounded-md bg-red-50 p-3 text-sm text-red-600 dark:bg-red-500/10 dark:text-red-400">
+            Too many wrong attempts — try again in {formatLockoutRemaining(countdown)}.
+          </p>
+        ) : (
+          <p className="text-sm opacity-70">Enter your PIN to unlock.</p>
+        )}
         <input
           type="password"
           inputMode="numeric"
           autoComplete="off"
           value={pin}
           onChange={(event) => setPin(event.target.value)}
-          className="w-full rounded-md border border-black/20 px-3 py-2 text-center text-2xl tracking-[0.4em] dark:border-white/20 dark:bg-transparent"
+          disabled={locked}
+          className="w-full rounded-md border border-black/20 px-3 py-2 text-center text-2xl tracking-[0.4em] disabled:opacity-50 dark:border-white/20 dark:bg-transparent"
           autoFocus
         />
         {error && <p className="text-sm text-red-500">{error}</p>}
         <button
           type="submit"
-          disabled={busy || pin.length === 0}
+          disabled={busy || locked || pin.length === 0}
           className="w-full rounded-md bg-black px-3 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black"
         >
           Unlock
