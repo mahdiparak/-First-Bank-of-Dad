@@ -30,6 +30,7 @@ import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
 import { findKidByName, mergeJoinedKid, mergeJoinedParent } from "@/lib/onboarding";
+import { isSessionUnlocked, markSessionUnlocked } from "@/lib/session-unlock";
 import { createEmptyState, kidAvatar, kidColor, normalizeState, type AuditActor, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
@@ -256,8 +257,15 @@ export default function Home() {
         setDeviceRole(role);
       }
       // Start locked whenever the resolved identity has a PIN. The pendingKidId path has its own
-      // KidPinPrompt (from Cloudflare Access auto-match), so it isn't double-locked here.
-      const lockNeeded = Boolean(primed) && needsAppLock(primed as FamilyBankState, effectiveRole, effectiveKidId, effectiveParentId);
+      // KidPinPrompt (from Cloudflare Access auto-match), so it isn't double-locked here. A prior
+      // unlock still remembered for this identity in this same browser tab (see
+      // lib/session-unlock.ts) skips the PIN screen again — refreshing the page (or coming back
+      // from the Reconnect flow) shouldn't re-ask, only an actual close-and-reopen should.
+      const lockNeeded =
+        Boolean(primed) &&
+        effectiveRole !== null &&
+        needsAppLock(primed as FamilyBankState, effectiveRole, effectiveKidId, effectiveParentId) &&
+        !isSessionUnlocked(effectiveRole, effectiveKidId, effectiveParentId);
       setUnlocked(!lockNeeded);
       setPhase("ready");
       startSync(key, roomId);
@@ -450,7 +458,9 @@ export default function Home() {
     await savePendingJoin(null);
     await saveOnboardingComplete(true);
 
-    // They set their PIN during the join wizard — open straight in; the lock applies on later opens.
+    // They set their PIN during the join wizard — open straight in. Remembered for this tab session
+    // so a refresh moments later doesn't immediately re-ask; a real close-and-reopen still will.
+    markSessionUnlocked(mutation.role, mutation.kidId ?? null, mutation.parentId ?? null);
     setUnlocked(true);
     setJoinError(null);
     setPhase("ready");
@@ -516,8 +526,9 @@ export default function Home() {
     prevStateRef.current = result.state;
     setState(result.state);
     await saveState(key, result.state);
-    // They just set their PIN in the wizard — don't make them re-enter it right away. The lock
-    // kicks in on the next cold open (see the boot effect).
+    // They just set their PIN in the wizard — don't make them re-enter it right away, and remember
+    // it for this tab session so a refresh doesn't either. A real close-and-reopen still will.
+    markSessionUnlocked("parent", null, result.parentId);
     setUnlocked(true);
     setPhase("ready");
     startSync(key, roomId);
@@ -545,7 +556,10 @@ export default function Home() {
     if (resolved.parentId) setDeviceParentId(resolved.parentId);
     if (resolved.kidId) setDeviceKidId(resolved.kidId);
     if (resolved.pendingKidId) setPendingKidId(resolved.pendingKidId);
-    // They just actively restored their own backup — open directly; the lock applies on later opens.
+    // They just actively restored their own backup — open directly, and remember it for this tab
+    // session so a refresh doesn't immediately re-ask. Only meaningful once an identity is actually
+    // resolved (a restore with no role match instead lands on RoleChooser, which handles its own gates).
+    if (resolved.role) markSessionUnlocked(resolved.role, resolved.kidId ?? null, resolved.parentId ?? null);
     setUnlocked(true);
     setPhase("ready");
     startSync(key, roomId);
@@ -835,7 +849,10 @@ export default function Home() {
         deviceRole={deviceRole}
         deviceKidId={deviceKidId}
         deviceParentId={deviceParentId}
-        onUnlock={() => setUnlocked(true)}
+        onUnlock={() => {
+          markSessionUnlocked(deviceRole, deviceKidId, deviceParentId);
+          setUnlocked(true);
+        }}
       />
     );
   }

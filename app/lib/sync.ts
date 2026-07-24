@@ -54,6 +54,19 @@ function isPresenceMessage(value: unknown): value is PresenceMessage {
   );
 }
 
+// Plaintext keepalive, never encrypted — see worker.js's matching PING_MESSAGE/PONG_MESSAGE. A
+// mobile network's NAT/firewall can silently drop an idle-looking connection well before the
+// browser's own close/error event notices; sending this periodically resets that idle timer, and
+// the reply is what lets zombieCheck (below) notice a connection that's gone dead.
+const PING_MESSAGE = JSON.stringify({ __ping__: true });
+const PONG_MESSAGE = JSON.stringify({ __pong__: true });
+const PING_INTERVAL_MS = 20_000;
+// Generous relative to PING_INTERVAL_MS (2x + slack) so one delayed tick under load isn't mistaken
+// for a dead connection — but still short enough that a real drop is caught well before "a few
+// seconds" turns into the user having to notice and manually refresh.
+const ZOMBIE_TIMEOUT_MS = 50_000;
+const ZOMBIE_CHECK_INTERVAL_MS = 10_000;
+
 export interface SyncClientOptions {
   relayUrl: string; // e.g. wss://relay.example.workers.dev/ws
   key: CryptoKey;
@@ -83,6 +96,9 @@ export class SyncClient {
   private ws: WebSocket | null = null;
   private reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private zombieCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private lastActivityAt = 0;
   private closedByUser = false;
 
   constructor(private readonly options: SyncClientOptions) {}
@@ -90,11 +106,27 @@ export class SyncClient {
   connect(): void {
     this.closedByUser = false;
     this.open();
+    // A backgrounded tab/PWA can have its timers throttled or fully suspended by the OS, so a
+    // scheduled reconnect (or even the browser's own close event) may not fire promptly — if at
+    // all — until the user comes back. Checking the moment they do, instead of waiting on a timer
+    // that might not run, is what turns "only a refresh brings it back" into "just works."
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this.handleResume);
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", this.handleResume);
+    }
   }
 
   disconnect(): void {
     this.closedByUser = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.clearTimers();
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this.handleResume);
+    }
+    if (typeof window !== "undefined") {
+      window.removeEventListener("online", this.handleResume);
+    }
     this.ws?.close();
   }
 
@@ -104,26 +136,45 @@ export class SyncClient {
     this.ws.send(payload);
   }
 
+  // Bound once so add/removeEventListener target the same reference.
+  private handleResume = (): void => {
+    if (this.closedByUser) return;
+    if (document.visibilityState === "hidden") return;
+    if (this.ws?.readyState === WebSocket.OPEN) return;
+    // Jump the queue instead of waiting out whatever backoff delay had built up — the user is
+    // looking at the screen right now.
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
+    this.open();
+  };
+
   private open(): void {
     const url = `${this.options.relayUrl}?room=${this.options.roomId}`;
     this.options.onStatusChange?.("connecting");
     // A stale count from a previous room (e.g. right after reconnecting somewhere new) would be
     // actively misleading — the fresh count arrives the moment this socket is accepted.
     this.options.onPresenceChange?.(0);
+    this.clearTimers();
 
     const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.addEventListener("open", () => {
       this.reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
+      this.lastActivityAt = Date.now();
       this.options.onStatusChange?.("open");
+      this.startKeepalive();
     });
 
     ws.addEventListener("message", (event: MessageEvent<string>) => {
+      // Any inbound byte — presence, a pong, or a real mutation — proves the connection is alive,
+      // even before we know which of those this particular message is.
+      this.lastActivityAt = Date.now();
       void this.handleMessage(event.data);
     });
 
     ws.addEventListener("close", () => {
+      this.clearTimers();
       this.options.onStatusChange?.("closed");
       this.options.onPresenceChange?.(0);
       if (!this.closedByUser) this.scheduleReconnect();
@@ -134,9 +185,43 @@ export class SyncClient {
     });
   }
 
+  /** Pings the relay periodically (resets idle-network timeouts that would otherwise silently
+   *  drop the connection) and independently checks how long it's been since ANYTHING was heard
+   *  back — a connection whose readyState still says OPEN but has gone quiet for too long is
+   *  almost certainly a zombie the browser hasn't noticed yet; force-closing it lets the normal
+   *  reconnect path recover instead of leaving the app stuck showing a stale "Synced". */
+  private startKeepalive(): void {
+    this.pingTimer = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(PING_MESSAGE);
+    }, PING_INTERVAL_MS);
+
+    this.zombieCheckTimer = setInterval(() => {
+      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - this.lastActivityAt > ZOMBIE_TIMEOUT_MS) {
+        this.ws.close(); // triggers the "close" listener, which schedules a normal reconnect
+      }
+    }, ZOMBIE_CHECK_INTERVAL_MS);
+  }
+
+  private clearTimers(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    if (this.zombieCheckTimer) {
+      clearInterval(this.zombieCheckTimer);
+      this.zombieCheckTimer = null;
+    }
+  }
+
   private async handleMessage(data: string): Promise<void> {
-    // The relay's presence message is deliberately plaintext JSON (see worker.js) — check for it
-    // before attempting to decrypt, since it isn't AES-GCM ciphertext and would just fail below.
+    // The relay's own messages are deliberately plaintext JSON (see worker.js) — check for those
+    // before attempting to decrypt, since neither is AES-GCM ciphertext and would just fail below.
+    if (data === PONG_MESSAGE) return;
     const presence = tryParsePresence(data);
     if (presence) {
       this.options.onPresenceChange?.(presence.count);

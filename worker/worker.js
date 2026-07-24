@@ -10,16 +10,21 @@ const MAX_MESSAGE_BYTES = 64 * 1024; // one encrypted mutation should be tiny
 const MAX_SOCKETS_PER_ROOM = 8; // parent + kids + a few extra devices
 const ROOM_ID_PATTERN = /^[a-f0-9]{64}$/i; // hex-encoded SHA-256
 
-// Plaintext (never encrypted) system message telling every socket in a room how many devices are
-// currently connected. This is the ONLY thing the Worker ever originates itself rather than just
-// relaying — it's connection metadata (a count), never room content, so it doesn't weaken the
-// "server can't make sense of the data" guarantee: an operator running this Worker can already see
-// how many sockets connect to a given room hash and when, with or without this message existing.
-// Clients use it purely to tell "my socket is open" apart from "I'm actually synced with someone" —
-// see lib/sync.ts's presence handling and the __presence__ marker it looks for.
+// Plaintext (never encrypted) system messages the Worker originates itself rather than just
+// relaying — connection metadata only (a count, a keepalive echo), never room content, so neither
+// weakens the "server can't make sense of the data" guarantee. See lib/sync.ts for how the client
+// tells these apart from real ciphertext.
 function presenceMessage(count) {
   return JSON.stringify({ __presence__: true, count });
 }
+
+// A mobile network's NAT/firewall can silently drop an idle-looking WebSocket well before either
+// side's own close/error event fires — the browser is left believing a dead connection is still
+// open. The client pings this exact string periodically; echoing it back immediately (a) resets
+// any idle timer on the path between them, and (b) gives the client a heartbeat it can measure
+// against to notice a zombie connection and force a reconnect instead of waiting indefinitely.
+const PING_MESSAGE = JSON.stringify({ __ping__: true });
+const PONG_MESSAGE = JSON.stringify({ __pong__: true });
 
 export class Room {
   constructor(state) {
@@ -50,6 +55,17 @@ export class Room {
     const size = typeof message === 'string' ? message.length : message.byteLength;
     if (size > MAX_MESSAGE_BYTES) {
       ws.close(1009, 'Message too large');
+      return;
+    }
+
+    // A keepalive ping is answered directly, not relayed — it's between one client and the relay,
+    // not room content the other peer needs to see.
+    if (message === PING_MESSAGE) {
+      try {
+        ws.send(PONG_MESSAGE);
+      } catch {
+        // Sender socket is already gone; nothing to do.
+      }
       return;
     }
 
