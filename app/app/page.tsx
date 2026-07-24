@@ -30,7 +30,7 @@ import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
 import { findKidByName, mergeJoinedKid, mergeJoinedParent } from "@/lib/onboarding";
-import { isSessionUnlocked, markSessionUnlocked } from "@/lib/session-unlock";
+import { isUnlockRemembered, rememberUnlock } from "@/lib/unlock-memory";
 import { createEmptyState, kidAvatar, kidColor, normalizeState, type AuditActor, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
@@ -258,14 +258,14 @@ export default function Home() {
       }
       // Start locked whenever the resolved identity has a PIN. The pendingKidId path has its own
       // KidPinPrompt (from Cloudflare Access auto-match), so it isn't double-locked here. A prior
-      // unlock still remembered for this identity in this same browser tab (see
-      // lib/session-unlock.ts) skips the PIN screen again — refreshing the page (or coming back
-      // from the Reconnect flow) shouldn't re-ask, only an actual close-and-reopen should.
+      // unlock still remembered for this identity (see lib/unlock-memory.ts) skips the PIN screen
+      // again — refreshing, backgrounding/resuming the PWA, or reopening it within the remember
+      // window shouldn't re-ask; it expires and asks again after that window passes.
       const lockNeeded =
         Boolean(primed) &&
         effectiveRole !== null &&
         needsAppLock(primed as FamilyBankState, effectiveRole, effectiveKidId, effectiveParentId) &&
-        !isSessionUnlocked(effectiveRole, effectiveKidId, effectiveParentId);
+        !isUnlockRemembered(effectiveRole, effectiveKidId, effectiveParentId);
       setUnlocked(!lockNeeded);
       setPhase("ready");
       startSync(key, roomId);
@@ -460,7 +460,7 @@ export default function Home() {
 
     // They set their PIN during the join wizard — open straight in. Remembered for this tab session
     // so a refresh moments later doesn't immediately re-ask; a real close-and-reopen still will.
-    markSessionUnlocked(mutation.role, mutation.kidId ?? null, mutation.parentId ?? null);
+    rememberUnlock(mutation.role, mutation.kidId ?? null, mutation.parentId ?? null);
     setUnlocked(true);
     setJoinError(null);
     setPhase("ready");
@@ -528,7 +528,7 @@ export default function Home() {
     await saveState(key, result.state);
     // They just set their PIN in the wizard — don't make them re-enter it right away, and remember
     // it for this tab session so a refresh doesn't either. A real close-and-reopen still will.
-    markSessionUnlocked("parent", null, result.parentId);
+    rememberUnlock("parent", null, result.parentId);
     setUnlocked(true);
     setPhase("ready");
     startSync(key, roomId);
@@ -559,7 +559,7 @@ export default function Home() {
     // They just actively restored their own backup — open directly, and remember it for this tab
     // session so a refresh doesn't immediately re-ask. Only meaningful once an identity is actually
     // resolved (a restore with no role match instead lands on RoleChooser, which handles its own gates).
-    if (resolved.role) markSessionUnlocked(resolved.role, resolved.kidId ?? null, resolved.parentId ?? null);
+    if (resolved.role) rememberUnlock(resolved.role, resolved.kidId ?? null, resolved.parentId ?? null);
     setUnlocked(true);
     setPhase("ready");
     startSync(key, roomId);
@@ -850,7 +850,7 @@ export default function Home() {
         deviceKidId={deviceKidId}
         deviceParentId={deviceParentId}
         onUnlock={() => {
-          markSessionUnlocked(deviceRole, deviceKidId, deviceParentId);
+          rememberUnlock(deviceRole, deviceKidId, deviceParentId);
           setUnlocked(true);
         }}
       />
