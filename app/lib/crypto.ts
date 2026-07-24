@@ -7,6 +7,7 @@
 const PBKDF2_ITERATIONS = 600_000; // OWASP 2023 minimum for PBKDF2-SHA256
 const KEY_DERIVATION_SALT = new TextEncoder().encode("first-bank-of-dad:key:v1");
 const ROOM_ID_DOMAIN = "first-bank-of-dad:room:v1:";
+const NAMED_ROOM_ID_DOMAIN = "first-bank-of-dad:room:named:v1:";
 const PARENT_PIN_DOMAIN = "first-bank-of-dad:parent-pin:v1:";
 const KID_PIN_DOMAIN = "first-bank-of-dad:kid-pin:v1:";
 const IV_BYTES = 12;
@@ -47,6 +48,27 @@ export async function deriveRoomId(phrase: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(ROOM_ID_DOMAIN + normalizePhrase(phrase)),
+  );
+  return toHex(digest);
+}
+
+/** Case-insensitive, whitespace-collapsed form of a friendly room name, so "Smith Family" and
+ *  "smith  family" address the same channel. */
+export function normalizeRoomName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Derives the wire-level Room ID from BOTH the Family Phrase and a friendly, human-typed room
+ * name. The relay only accepts a 64-hex SHA-256 id, so the friendly name is never sent as-is;
+ * folding the phrase in as well keeps the channel unguessable (a friendly name alone would let an
+ * outsider squat/DoS the room), so a joining device needs the exact phrase AND room name to even
+ * find the channel — neither is enough on its own. The phrase is still never transmitted.
+ */
+export async function deriveRoomIdFromPhraseAndName(phrase: string, roomName: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(NAMED_ROOM_ID_DOMAIN + normalizePhrase(phrase) + "::" + normalizeRoomName(roomName)),
   );
   return toHex(digest);
 }

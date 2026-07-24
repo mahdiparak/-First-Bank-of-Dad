@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { hasParentPinGate, verifyParentPin } from "@/lib/parent-auth";
 import type { FamilyBankState } from "@/lib/schema";
+import { loadRoomName } from "@/lib/storage";
 import { InfoTooltip } from "./info-tooltip";
 
 /**
@@ -17,9 +18,10 @@ export function FamilyPhraseSettings({
   onChangePhrase,
 }: {
   state: FamilyBankState;
-  onChangePhrase: (phrase: string) => Promise<void>;
+  onChangePhrase: (phrase: string, roomName: string) => Promise<void>;
 }) {
   const [phrase, setPhrase] = useState("");
+  const [roomName, setRoomName] = useState("");
   const [visible, setVisible] = useState(false);
   const [pinPrompt, setPinPrompt] = useState(false);
   const [pin, setPin] = useState("");
@@ -27,6 +29,14 @@ export function FamilyPhraseSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Prefill the room name with the current one so a parent changing only the phrase keeps their
+  // room, and changing only the room name doesn't blank it out.
+  useEffect(() => {
+    void loadRoomName().then((name) => {
+      if (name) setRoomName(name);
+    });
+  }, []);
 
   function handleToggleReveal() {
     if (visible) {
@@ -61,16 +71,20 @@ export function FamilyPhraseSettings({
       setError("Use a longer Family Phrase (8+ characters) — it's your only encryption key.");
       return;
     }
+    if (!roomName.trim()) {
+      setError("Give your family a room name.");
+      return;
+    }
     if (
       !window.confirm(
-        "This changes the sync phrase for the whole family. Every other device (a co-parent's phone, a kid's tablet) needs to be given this exact new phrase to keep syncing — they won't update on their own. Continue?",
+        "This changes the sync phrase and room for the whole family. Every other device (a co-parent's phone, a kid's tablet) needs to be given this exact new phrase and room name to keep syncing — they won't update on their own. Continue?",
       )
     ) {
       return;
     }
     setBusy(true);
     try {
-      await onChangePhrase(phrase.trim());
+      await onChangePhrase(phrase.trim(), roomName.trim());
       setMessage("Family Phrase changed — this device is re-syncing under the new phrase now.");
       setPhrase("");
       setVisible(false);
@@ -124,20 +138,28 @@ export function FamilyPhraseSettings({
           {pinError && <p className="w-full text-sm text-red-500">{pinError}</p>}
         </form>
       ) : (
-        <form onSubmit={handleSubmit} className="flex flex-wrap gap-2">
-          <RevealInputWithGatedEye
-            value={phrase}
-            onChange={setPhrase}
-            visible={visible}
-            onToggleVisible={handleToggleReveal}
-            placeholder="New Family Phrase"
+        <form onSubmit={handleSubmit} className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <RevealInputWithGatedEye
+              value={phrase}
+              onChange={setPhrase}
+              visible={visible}
+              onToggleVisible={handleToggleReveal}
+              placeholder="New Family Phrase"
+            />
+          </div>
+          <input
+            value={roomName}
+            onChange={(event) => setRoomName(event.target.value)}
+            placeholder="Family room name"
+            className="w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent"
           />
           <button
             type="submit"
             disabled={busy}
             className="rounded-md bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
           >
-            Change phrase
+            Change phrase &amp; room
           </button>
         </form>
       )}

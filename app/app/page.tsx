@@ -14,7 +14,9 @@ import { ParentSettingsPanel } from "@/components/parent-settings";
 import { ProfilePanel } from "@/components/profile-panel";
 import { ProfileSettingsPanel } from "@/components/profile-settings";
 import { ReconciliationPanel } from "@/components/reconciliation-panel";
-import { RevealInput } from "@/components/reveal-input";
+import { AppLock, needsAppLock } from "@/components/app-lock";
+import { JoinApprovalBanner } from "@/components/join-approval";
+import { OnboardingWizard, type CreateFamilyResult, type JoinResult } from "@/components/onboarding-wizard";
 import { KidPinPrompt, RoleChooser } from "@/components/role-gate";
 import { FamilyPhraseSettings } from "@/components/family-phrase-settings";
 import { SyncSettings } from "@/components/sync-settings";
@@ -23,10 +25,11 @@ import { runScheduledEngines } from "@/lib/allowance";
 import { resolveRoleFromAccessIdentity } from "@/lib/access-identity";
 import { diffCelebrations, type CelebrationEvent } from "@/lib/celebrations";
 import { notifyClaimedBounties, notifyNewQuests } from "@/lib/push-notifications";
-import { deriveEncryptionKey, deriveRoomId } from "@/lib/crypto";
+import { deriveEncryptionKey, deriveRoomIdFromPhraseAndName } from "@/lib/crypto";
 import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
+import { findKidByName, mergeJoinedKid, mergeJoinedParent } from "@/lib/onboarding";
 import { createEmptyState, kidAvatar, kidColor, normalizeState, type AuditActor, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
@@ -36,6 +39,8 @@ import {
   loadDeviceKidId,
   loadDeviceParentId,
   loadDeviceRole,
+  loadOnboardingComplete,
+  loadPendingJoin,
   loadRoomId,
   loadState,
   saveCryptoKey,
@@ -43,15 +48,19 @@ import {
   saveDeviceKidId,
   saveDeviceParentId,
   saveDeviceRole,
+  saveOnboardingComplete,
+  savePendingJoin,
   saveRoomId,
+  saveRoomName,
   saveState,
   type DeviceRole,
+  type PendingJoin,
 } from "@/lib/storage";
-import { SyncClient, type SyncMutation, type SyncStatus } from "@/lib/sync";
+import { SyncClient, type JoinRequest, type SyncMutation, type SyncStatus } from "@/lib/sync";
 
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "";
 
-type Phase = "loading" | "enter-phrase" | "ready";
+type Phase = "loading" | "onboarding" | "waiting-approval" | "ready";
 type ParentTab = "kids" | "approvals" | "money" | "talk" | "audit" | "settings";
 type SettingsSection = "profile" | "family" | "app";
 
@@ -115,8 +124,12 @@ async function resolveInitialRole(currentRole: DeviceRole | null, state: FamilyB
 
 export default function Home() {
   const [phase, setPhase] = useState<Phase>("loading");
-  const [phraseInput, setPhraseInput] = useState("");
-  const [phraseError, setPhraseError] = useState<string | null>(null);
+  // Cold-open PIN lock: starts locked whenever the active identity has a PIN (see needsAppLock).
+  const [unlocked, setUnlocked] = useState(true);
+  // Parent side: devices asking to join, awaiting this parent's approve/decline.
+  const [pendingJoinRequests, setPendingJoinRequests] = useState<JoinRequest[]>([]);
+  // Joining side: shown on the "waiting for a parent to approve" screen if a parent rejects.
+  const [joinError, setJoinError] = useState<string | null>(null);
   const [state, setState] = useState<FamilyBankState | null>(null);
   const [selectedKidId, setSelectedKidId] = useState<string | null>(null);
   const [parentTab, setParentTab] = useState<ParentTab>("kids");
@@ -143,6 +156,14 @@ export default function Home() {
   const deviceRoleRef = useRef<DeviceRole | null>(null);
   const syncClientRef = useRef<SyncClient | null>(null);
   const prevStateRef = useRef<FamilyBankState | null>(null);
+  // True on a joining device between "request to join" and a parent's approval. While set, this
+  // device ignores every incoming message except its own approval/rejection, so it never adopts
+  // family data before a parent lets it in.
+  const awaitingApprovalRef = useRef(false);
+  // What this joining device keeps re-announcing until approved (so a parent who comes online later
+  // still sees the request — the relay never replays history).
+  const pendingJoinRef = useRef<PendingJoin | null>(null);
+  const joinRequestTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Mirrors `state` for use inside the sync callbacks below, which are handed to SyncClient once
   // at connect time and would otherwise close over a stale value from that moment.
   const stateRef = useRef<FamilyBankState | null>(null);
@@ -152,22 +173,44 @@ export default function Home() {
 
   useEffect(() => {
     void (async () => {
-      const [key, roomId, storedState, deviceId, role, kidId, parentId] = await Promise.all([
-        loadCryptoKey(),
-        loadRoomId(),
-        loadState(),
-        getOrCreateDeviceId(),
-        loadDeviceRole(),
-        loadDeviceKidId(),
-        loadDeviceParentId(),
-      ]);
+      const [key, roomId, storedState, deviceId, role, kidId, parentId, onboardingComplete, pendingJoin] =
+        await Promise.all([
+          loadCryptoKey(),
+          loadRoomId(),
+          loadState(),
+          getOrCreateDeviceId(),
+          loadDeviceRole(),
+          loadDeviceKidId(),
+          loadDeviceParentId(),
+          loadOnboardingComplete(),
+          loadPendingJoin(),
+        ]);
       deviceIdRef.current = deviceId;
       deviceRoleRef.current = role;
       setDeviceKidId(kidId);
       setDeviceParentId(parentId);
 
-      if (!key || !roomId) {
-        setPhase("enter-phrase");
+      // A join that a parent hasn't approved yet: resume the waiting screen and keep announcing.
+      // Checked before the "onboarded" logic below, since a mid-join device already has a key+room
+      // saved but must NOT be treated as a finished install.
+      if (pendingJoin && key && roomId) {
+        roomIdRef.current = roomId;
+        cryptoKeyRef.current = key;
+        pendingJoinRef.current = pendingJoin;
+        awaitingApprovalRef.current = true;
+        setPhase("waiting-approval");
+        startSync(key, roomId);
+        return;
+      }
+
+      // A device that joined before this build has a key+room but no onboarding flag — treat it as
+      // already onboarded so existing families are never sent back through the wizard.
+      const legacyOnboarded = Boolean(key && roomId);
+      if (!onboardingComplete && legacyOnboarded) await saveOnboardingComplete(true);
+      const onboarded = onboardingComplete || legacyOnboarded;
+
+      if (!onboarded || !key || !roomId) {
+        setPhase("onboarding");
         return;
       }
 
@@ -178,21 +221,38 @@ export default function Home() {
       prevStateRef.current = storedState;
       const primed = primeState(storedState);
       setState(primed);
+      let effectiveRole = role;
+      let effectiveKidId = kidId;
+      let effectiveParentId = parentId;
       if (primed) {
         const resolved = await resolveInitialRole(role, primed);
+        effectiveRole = resolved.role;
         deviceRoleRef.current = resolved.role;
         setDeviceRole(resolved.role);
-        if (resolved.parentId) setDeviceParentId(resolved.parentId);
-        if (resolved.kidId) setDeviceKidId(resolved.kidId);
+        if (resolved.parentId) {
+          effectiveParentId = resolved.parentId;
+          setDeviceParentId(resolved.parentId);
+        }
+        if (resolved.kidId) {
+          effectiveKidId = resolved.kidId;
+          setDeviceKidId(resolved.kidId);
+        }
         if (resolved.pendingKidId) setPendingKidId(resolved.pendingKidId);
       } else {
         setDeviceRole(role);
       }
+      // Start locked whenever the resolved identity has a PIN. The pendingKidId path has its own
+      // KidPinPrompt (from Cloudflare Access auto-match), so it isn't double-locked here.
+      const lockNeeded = Boolean(primed) && needsAppLock(primed as FamilyBankState, effectiveRole, effectiveKidId, effectiveParentId);
+      setUnlocked(!lockNeeded);
       setPhase("ready");
       startSync(key, roomId);
     })();
 
-    return () => syncClientRef.current?.disconnect();
+    return () => {
+      syncClientRef.current?.disconnect();
+      if (joinRequestTimerRef.current) clearInterval(joinRequestTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -235,6 +295,13 @@ export default function Home() {
       roomId,
       onStatusChange: (status) => {
         setSyncStatus(status);
+        if (status === "open" && awaitingApprovalRef.current) {
+          // Still waiting to be let in: only announce the join request (never hand out or ask for
+          // data), and keep re-announcing so a parent who connects later still sees it.
+          void sendJoinRequest();
+          startJoinRequestLoop();
+          return;
+        }
         // The relay never replays history, so joining a room tells you nothing about whether
         // anyone else is already there with real data — and this device may itself have missed
         // broadcasts while it was disconnected (e.g. backgrounded). On every fresh connection,
@@ -259,6 +326,25 @@ export default function Home() {
   }
 
   async function applyMutation(mutation: SyncMutation) {
+    // A device still waiting to be let in listens for nothing but its own verdict — it must never
+    // adopt family data before a parent approves it.
+    if (awaitingApprovalRef.current) {
+      if (mutation.type === "join-approved" && mutation.targetDeviceId === deviceIdRef.current) {
+        await adoptApproval(mutation);
+      } else if (mutation.type === "join-rejected" && mutation.targetDeviceId === deviceIdRef.current) {
+        handleRejection(mutation.reason);
+      }
+      return;
+    }
+
+    if (mutation.type === "join-request") {
+      handleIncomingJoinRequest(mutation);
+      return;
+    }
+    // Approvals/rejections are only meaningful to the device they target (which handles them in the
+    // awaiting branch above). An established device ignores them.
+    if (mutation.type === "join-approved" || mutation.type === "join-rejected") return;
+
     if (mutation.type === "snapshot") {
       // Last-write-wins by timestamp — fine for a handful of family devices, not a general CRDT
       // merge. But a device that has never held real data yet (e.g. a kid's phone where "Start
@@ -284,35 +370,206 @@ export default function Home() {
     }
   }
 
-  async function handlePhraseSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    setPhraseError(null);
-    const phrase = phraseInput.trim();
-    if (phrase.length < 8) {
-      setPhraseError("Use a longer Family Phrase (8+ characters) — it's your only encryption key.");
+  /** Parent side: a device is asking to join. A kid whose name isn't on the roster is auto-rejected
+   *  (the phrase/room were right, but they're not one of ours); everything else waits for a human. */
+  function handleIncomingJoinRequest(request: JoinRequest) {
+    if (deviceRoleRef.current !== "parent") return; // only a parent grants access
+    const mine = stateRef.current;
+    if (!mine) return;
+    if (request.requestedRole === "kid" && !findKidByName(mine, request.claimedName)) {
+      void syncClientRef.current?.send({
+        type: "join-rejected",
+        targetDeviceId: request.deviceId,
+        reason: "name-not-found",
+        deviceId: deviceIdRef.current ?? "",
+        sentAt: new Date().toISOString(),
+      });
       return;
     }
+    setPendingJoinRequests((list) =>
+      list.some((existing) => existing.deviceId === request.deviceId) ? list : [...list, request],
+    );
+  }
 
-    const [key, roomId] = await Promise.all([deriveEncryptionKey(phrase), deriveRoomId(phrase)]);
-    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId)]);
+  /** Joining side: a parent said yes. Adopt the family state they sent, commit our role, and open. */
+  async function adoptApproval(mutation: Extract<SyncMutation, { type: "join-approved" }>) {
+    awaitingApprovalRef.current = false;
+    stopJoinRequestLoop();
+    const incoming = normalizeState(mutation.state);
+    // Don't replay the whole imported history as fresh celebrations.
+    prevStateRef.current = incoming;
+
+    deviceRoleRef.current = mutation.role;
+    setDeviceRole(mutation.role);
+    void saveDeviceRole(mutation.role);
+    if (mutation.role === "kid" && mutation.kidId) {
+      setDeviceKidId(mutation.kidId);
+      void saveDeviceKidId(mutation.kidId);
+    }
+    if (mutation.role === "parent" && mutation.parentId) {
+      setDeviceParentId(mutation.parentId);
+      void saveDeviceParentId(mutation.parentId);
+    }
+
+    void saveState(incoming);
+    setState(incoming);
+    pendingJoinRef.current = null;
+    await savePendingJoin(null);
+    await saveOnboardingComplete(true);
+
+    // They set their PIN during the join wizard — open straight in; the lock applies on later opens.
+    setUnlocked(true);
+    setJoinError(null);
+    setPhase("ready");
+  }
+
+  function handleRejection(reason: "name-not-found" | "declined") {
+    setJoinError(
+      reason === "name-not-found"
+        ? "We couldn't find your name on this family's list. Check the spelling with a parent — or ask them to add you first."
+        : "A parent declined this request.",
+    );
+    stopJoinRequestLoop();
+  }
+
+  async function sendJoinRequest() {
+    const pending = pendingJoinRef.current;
+    if (!pending || !syncClientRef.current || !deviceIdRef.current) return;
+    await syncClientRef.current.send({
+      type: "join-request",
+      deviceId: deviceIdRef.current,
+      sentAt: new Date().toISOString(),
+      claimedName: pending.claimedName,
+      requestedRole: pending.role,
+      email: pending.email,
+      pinHash: pending.pinHash,
+    });
+  }
+
+  function startJoinRequestLoop() {
+    stopJoinRequestLoop();
+    // Re-announce periodically so a parent who comes online after we did still sees the request.
+    joinRequestTimerRef.current = setInterval(() => {
+      if (awaitingApprovalRef.current) void sendJoinRequest();
+      else stopJoinRequestLoop();
+    }, 10_000);
+  }
+
+  function stopJoinRequestLoop() {
+    if (joinRequestTimerRef.current) {
+      clearInterval(joinRequestTimerRef.current);
+      joinRequestTimerRef.current = null;
+    }
+  }
+
+  /** Wizard "Start a new family" finished: derive the key + channel, persist the freshly-built
+   *  state, and open straight into the parent dashboard (behind the PIN they just set). */
+  async function handleCreateFamily(result: CreateFamilyResult) {
+    const [key, roomId] = await Promise.all([
+      deriveEncryptionKey(result.phrase),
+      deriveRoomIdFromPhraseAndName(result.phrase, result.roomName),
+    ]);
+    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId), saveRoomName(result.roomName)]);
     roomIdRef.current = roomId;
     cryptoKeyRef.current = key;
-    setPhraseInput("");
 
-    const existing = await loadState();
-    prevStateRef.current = existing;
-    const primed = primeState(existing);
-    setState(primed);
-    if (primed) {
-      const resolved = await resolveInitialRole(deviceRoleRef.current, primed);
-      deviceRoleRef.current = resolved.role;
-      setDeviceRole(resolved.role);
-      if (resolved.parentId) setDeviceParentId(resolved.parentId);
-      if (resolved.kidId) setDeviceKidId(resolved.kidId);
-      if (resolved.pendingKidId) setPendingKidId(resolved.pendingKidId);
-    }
+    deviceRoleRef.current = "parent";
+    setDeviceRole("parent");
+    await saveDeviceRole("parent");
+    setDeviceParentId(result.parentId);
+    await saveDeviceParentId(result.parentId);
+    await saveOnboardingComplete(true);
+
+    prevStateRef.current = result.state;
+    setState(result.state);
+    await saveState(result.state);
+    // They just set their PIN in the wizard — don't make them re-enter it right away. The lock
+    // kicks in on the next cold open (see the boot effect).
+    setUnlocked(true);
     setPhase("ready");
     startSync(key, roomId);
+  }
+
+  /** Wizard "Join my family" finished: connect to the family's channel and sit in the waiting room,
+   *  announcing the join request, until a parent approves (handled by adoptApproval). */
+  async function handleJoin(result: JoinResult) {
+    const [key, roomId] = await Promise.all([
+      deriveEncryptionKey(result.phrase),
+      deriveRoomIdFromPhraseAndName(result.phrase, result.roomName),
+    ]);
+    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId), saveRoomName(result.roomName)]);
+    roomIdRef.current = roomId;
+    cryptoKeyRef.current = key;
+
+    const pending: PendingJoin = {
+      claimedName: result.request.claimedName,
+      role: result.request.requestedRole,
+      email: result.request.email,
+      pinHash: result.request.pinHash,
+    };
+    pendingJoinRef.current = pending;
+    await savePendingJoin(pending);
+    awaitingApprovalRef.current = true;
+    setJoinError(null);
+    setPhase("waiting-approval");
+    startSync(key, roomId);
+  }
+
+  /** Parent taps Approve: fold the joiner's PIN/email onto their profile, broadcast the merged state
+   *  to the whole family, and send the newly-approved device its verdict + data to adopt. */
+  async function handleApproveJoin(request: JoinRequest) {
+    const current = stateRef.current;
+    if (!current) return;
+    let merged = current;
+    let kidId: string | undefined;
+    let parentId: string | undefined;
+    if (request.requestedRole === "kid") {
+      const kid = findKidByName(current, request.claimedName);
+      if (!kid) {
+        void handleDeclineJoin(request);
+        return;
+      }
+      merged = mergeJoinedKid(current, kid.id, request);
+      kidId = kid.id;
+    } else {
+      const result = mergeJoinedParent(current, request);
+      merged = result.state;
+      parentId = result.parentId;
+    }
+    commitState(merged);
+    await syncClientRef.current?.send({
+      type: "join-approved",
+      targetDeviceId: request.deviceId,
+      role: request.requestedRole,
+      kidId,
+      parentId,
+      state: merged,
+      deviceId: deviceIdRef.current ?? "",
+      sentAt: new Date().toISOString(),
+    });
+    setPendingJoinRequests((list) => list.filter((entry) => entry.deviceId !== request.deviceId));
+  }
+
+  async function handleDeclineJoin(request: JoinRequest) {
+    await syncClientRef.current?.send({
+      type: "join-rejected",
+      targetDeviceId: request.deviceId,
+      reason: "declined",
+      deviceId: deviceIdRef.current ?? "",
+      sentAt: new Date().toISOString(),
+    });
+    setPendingJoinRequests((list) => list.filter((entry) => entry.deviceId !== request.deviceId));
+  }
+
+  /** Bail out of a pending join (from the waiting screen) back to the wizard. */
+  async function handleCancelJoin() {
+    awaitingApprovalRef.current = false;
+    stopJoinRequestLoop();
+    syncClientRef.current?.disconnect();
+    pendingJoinRef.current = null;
+    await savePendingJoin(null);
+    setJoinError(null);
+    setPhase("onboarding");
   }
 
   async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
@@ -427,12 +684,17 @@ export default function Home() {
   /** Parent-only: switches this whole family to a new Family Phrase, re-deriving both the
    *  encryption key and the room it syncs through, then re-broadcasting this device's current
    *  data so it becomes the seed for whichever other devices are given the new phrase next. */
-  async function handleChangeFamilyPhrase(newPhrase: string) {
+  async function handleChangeFamilyPhrase(newPhrase: string, newRoomName: string) {
     const phrase = newPhrase.trim();
+    const roomName = newRoomName.trim();
     if (phrase.length < 8) throw new Error("Use a longer Family Phrase (8+ characters) — it's your only encryption key.");
-    const [key, roomId] = await Promise.all([deriveEncryptionKey(phrase), deriveRoomId(phrase)]);
+    if (!roomName) throw new Error("Give your family a room name.");
+    const [key, roomId] = await Promise.all([
+      deriveEncryptionKey(phrase),
+      deriveRoomIdFromPhraseAndName(phrase, roomName),
+    ]);
     syncClientRef.current?.disconnect();
-    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId)]);
+    await Promise.all([saveCryptoKey(key), saveRoomId(roomId), saveDefaultRoomId(roomId), saveRoomName(roomName)]);
     roomIdRef.current = roomId;
     cryptoKeyRef.current = key;
     startSync(key, roomId);
@@ -453,38 +715,24 @@ export default function Home() {
     return <CenteredMessage text="Loading…" />;
   }
 
-  if (phase === "enter-phrase") {
+  if (phase === "onboarding") {
+    return <OnboardingWizard onCreateFamily={handleCreateFamily} onJoin={handleJoin} />;
+  }
+
+  if (phase === "waiting-approval") {
+    return <WaitingApproval error={joinError} onCancel={() => void handleCancelJoin()} />;
+  }
+
+  // Cold-open lock: block the whole app until this device's owner enters their PIN.
+  if (!unlocked && state && deviceRole) {
     return (
-      <main className="flex flex-1 items-center justify-center p-6">
-        <form
-          onSubmit={handlePhraseSubmit}
-          className="w-full max-w-sm space-y-4 rounded-xl border border-black/10 p-6 dark:border-white/10"
-        >
-          <h1 className="text-lg font-semibold">Enter your Family Phrase</h1>
-          <p className="text-sm opacity-70">
-            This unlocks this device and is never sent anywhere. If this is a new device, it&apos;ll
-            wait for the first sync — or you can import a backup JSON file after continuing.
-          </p>
-          <RevealInput
-            value={phraseInput}
-            onChange={setPhraseInput}
-            placeholder="Family Phrase"
-            className="rounded-md border border-black/20 py-2 pl-3 dark:border-white/20 dark:bg-transparent"
-            autoFocus
-          />
-          <p className="text-xs opacity-60">
-            A typo here lands silently on a different, empty family instead of an error — tap 👁️
-            to double-check what you typed before continuing.
-          </p>
-          {phraseError && <p className="text-sm text-red-500">{phraseError}</p>}
-          <button
-            type="submit"
-            className="w-full rounded-md bg-black px-3 py-2 text-white dark:bg-white dark:text-black"
-          >
-            Continue
-          </button>
-        </form>
-      </main>
+      <AppLock
+        state={state}
+        deviceRole={deviceRole}
+        deviceKidId={deviceKidId}
+        deviceParentId={deviceParentId}
+        onUnlock={() => setUnlocked(true)}
+      />
     );
   }
 
@@ -600,6 +848,15 @@ export default function Home() {
             )}
           </div>
         </header>
+
+      {state && (
+        <JoinApprovalBanner
+          state={state}
+          requests={pendingJoinRequests}
+          onApprove={(request) => void handleApproveJoin(request)}
+          onDecline={(request) => void handleDeclineJoin(request)}
+        />
+      )}
 
       {!state ? (
         <section className="space-y-4 rounded-xl border border-black/10 p-6 dark:border-white/10">
@@ -787,6 +1044,41 @@ function CenteredMessage({ text }: { text: string }) {
   return (
     <main className="flex flex-1 items-center justify-center">
       <p className="text-sm opacity-70">{text}</p>
+    </main>
+  );
+}
+
+/** Shown on a joining device between "Request to join" and a parent's decision. */
+function WaitingApproval({ error, onCancel }: { error: string | null; onCancel: () => void }) {
+  return (
+    <main className="flex flex-1 items-center justify-center p-6">
+      <div className="w-full max-w-sm space-y-4 rounded-xl border border-black/10 p-6 text-center dark:border-white/10">
+        {error ? (
+          <>
+            <div className="text-4xl">🚫</div>
+            <h1 className="text-lg font-semibold">Couldn&apos;t join yet</h1>
+            <p className="text-sm text-red-500">{error}</p>
+            <button
+              onClick={onCancel}
+              className="w-full rounded-md bg-black px-3 py-2 text-white dark:bg-white dark:text-black"
+            >
+              Try again
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="animate-pulse text-4xl">⏳</div>
+            <h1 className="text-lg font-semibold">Waiting for a parent to approve</h1>
+            <p className="text-sm opacity-70">
+              You&apos;re connected. As soon as a parent opens the app and approves you, this device
+              fills with your family&apos;s data. You can leave this screen open.
+            </p>
+            <button onClick={onCancel} className="text-sm opacity-60 underline">
+              Cancel
+            </button>
+          </>
+        )}
+      </div>
     </main>
   );
 }

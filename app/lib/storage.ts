@@ -20,11 +20,14 @@ const STATE_KEY = "family-bank-state";
 const CRYPTO_KEY_KEY = "encryption-key";
 const ROOM_ID_KEY = "room-id";
 const DEFAULT_ROOM_ID_KEY = "default-room-id";
+const ROOM_NAME_KEY = "room-name";
 const DEVICE_ID_KEY = "device-id";
 const DEVICE_ROLE_KEY = "device-role";
 const DEVICE_KID_ID_KEY = "device-kid-id";
 const DEVICE_PARENT_ID_KEY = "device-parent-id";
 const INSTALL_BANNER_DISMISSED_KEY = "install-banner-dismissed";
+const ONBOARDING_COMPLETE_KEY = "onboarding-complete";
+const PENDING_JOIN_KEY = "pending-join";
 const MARKET_DATA_ADMIN_TOKEN_KEY = "market-data-admin-token";
 const ALPHA_VANTAGE_API_KEY_KEY = "alpha-vantage-api-key";
 
@@ -66,6 +69,20 @@ export async function loadDefaultRoomId(): Promise<string | null> {
 
 export async function saveDefaultRoomId(roomId: string): Promise<void> {
   await keyStore.setItem(DEFAULT_ROOM_ID_KEY, roomId);
+}
+
+/** The friendly, human-typed room name (e.g. "Smith Family") the wire Room ID was derived from.
+ *  Kept on-device only — like the Family Phrase, it's never sent to the server (only its hash is). */
+export async function loadRoomName(): Promise<string | null> {
+  return keyStore.getItem<string>(ROOM_NAME_KEY);
+}
+
+export async function saveRoomName(roomName: string | null): Promise<void> {
+  if (roomName) {
+    await keyStore.setItem(ROOM_NAME_KEY, roomName);
+  } else {
+    await keyStore.removeItem(ROOM_NAME_KEY);
+  }
 }
 
 /** Forgets the derived key/room id (e.g. "log out"). The Family Phrase itself was never stored. */
@@ -148,6 +165,38 @@ export async function saveAlphaVantageApiKey(apiKey: string | null): Promise<voi
     await keyStore.setItem(ALPHA_VANTAGE_API_KEY_KEY, apiKey);
   } else {
     await keyStore.removeItem(ALPHA_VANTAGE_API_KEY_KEY);
+  }
+}
+
+// Whether THIS device has finished the onboarding wizard. Device-local, not part of the synced
+// family state — a new device joining an existing family still onboards even though the family
+// itself is long since set up.
+export async function loadOnboardingComplete(): Promise<boolean> {
+  return Boolean(await keyStore.getItem<boolean>(ONBOARDING_COMPLETE_KEY));
+}
+
+export async function saveOnboardingComplete(complete: boolean): Promise<void> {
+  await keyStore.setItem(ONBOARDING_COMPLETE_KEY, complete);
+}
+
+/** What a joining device submitted and is waiting on a parent to approve. Persisted so closing and
+ *  reopening the app resumes the "waiting for approval" screen instead of restarting onboarding. */
+export interface PendingJoin {
+  claimedName: string;
+  role: DeviceRole;
+  email?: string;
+  pinHash?: string;
+}
+
+export async function loadPendingJoin(): Promise<PendingJoin | null> {
+  return keyStore.getItem<PendingJoin>(PENDING_JOIN_KEY);
+}
+
+export async function savePendingJoin(pending: PendingJoin | null): Promise<void> {
+  if (pending) {
+    await keyStore.setItem(PENDING_JOIN_KEY, pending);
+  } else {
+    await keyStore.removeItem(PENDING_JOIN_KEY);
   }
 }
 

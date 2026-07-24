@@ -365,13 +365,13 @@ export function updateKidAllowance(
 }
 
 /** Adds a named parent/guardian profile, so a device can greet whoever's using it by name. */
-export function addParentProfile(state: FamilyBankState, name: string, avatar?: string): FamilyBankState {
+export function addParentProfile(state: FamilyBankState, name: string, avatar?: string, age?: number): FamilyBankState {
   if (!name.trim()) throw new Error("Enter a name.");
   return touch({
     ...state,
     parentProfiles: [
       ...state.parentProfiles,
-      { id: crypto.randomUUID(), name: name.trim(), avatar, createdAt: new Date().toISOString() },
+      { id: crypto.randomUUID(), name: name.trim(), avatar, age, createdAt: new Date().toISOString() },
     ],
   });
 }

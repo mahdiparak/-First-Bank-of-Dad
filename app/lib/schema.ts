@@ -51,6 +51,8 @@ export interface ParentProfile {
   id: string;
   name: string;
   avatar?: string;
+  /** Optional — collected during onboarding for parity with kids; purely informational. */
+  age?: number;
   createdAt: string;
   /** Matches Cloudflare Access identity so logging in with this email auto-opens this parent's dashboard. */
   email?: string;
