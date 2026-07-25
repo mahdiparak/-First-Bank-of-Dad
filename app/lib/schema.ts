@@ -242,6 +242,27 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassMeta> = {
   },
 };
 
+/**
+ * What an asset class looks like when this build doesn't know it — a position synced from a newer
+ * version, or a hand-edited/imported backup. The screens read metadata off whatever positions the
+ * state actually holds, so an unknown class must degrade to a real row a kid can still cash out,
+ * never to an undefined lookup that takes the whole dashboard down.
+ */
+const UNKNOWN_ASSET_CLASS: AssetClassMeta = {
+  label: "Investment",
+  shortLabel: "Investment",
+  emoji: "❔",
+  description: "An investment this version of the app doesn't recognise.",
+  howItWorks: "This came from another device running a different version of the app.",
+  ride: "bumpy",
+};
+
+export function assetClassMeta(assetClass: AssetClass): AssetClassMeta {
+  // hasOwn, not a plain lookup: a position carrying "constructor" or "toString" as its class would
+  // otherwise resolve to something off Object.prototype instead of falling back.
+  return Object.hasOwn(ASSET_CLASSES, assetClass) ? ASSET_CLASSES[assetClass] : UNKNOWN_ASSET_CLASS;
+}
+
 export type WithdrawalStatus = "pending" | "approved" | "denied";
 
 export interface WithdrawalRequest {

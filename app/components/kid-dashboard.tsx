@@ -181,7 +181,7 @@ function HomeTab({
 
       <section className="rounded-xl border border-black/10 p-4 dark:border-white/10">
         <p className="text-sm opacity-70">Dad Match streak</p>
-        <p className="text-2xl font-semibold">
+        <p className="break-words text-2xl font-semibold">
           {"🔥".repeat(Math.min(streakWeeks, 8)) || "—"} {streakWeeks} week{streakWeeks === 1 ? "" : "s"}
         </p>
         <p className="text-xs opacity-60">
@@ -335,7 +335,9 @@ function YoungKidHome({
 
       <section className="rounded-3xl border border-black/10 p-5 text-center dark:border-white/10">
         <p className="text-lg font-semibold">My saving streak</p>
-        <p className="mt-1 text-4xl">{"⭐".repeat(Math.min(Math.max(streakWeeks, 0), 10)) || "🌱"}</p>
+        {/* A long streak is a solid run of emoji with no spaces in it — without break-words it
+            can't wrap, and a 10-star streak pushes the whole page sideways on a phone. */}
+        <p className="mt-1 break-words text-4xl">{"⭐".repeat(Math.min(Math.max(streakWeeks, 0), 10)) || "🌱"}</p>
         <p className="mt-1 text-sm opacity-70">
           {streakWeeks === 0 ? "A new streak is growing!" : `${streakWeeks} week${streakWeeks === 1 ? "" : "s"} of saving!`}
         </p>

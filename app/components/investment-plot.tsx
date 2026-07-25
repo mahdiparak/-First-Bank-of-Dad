@@ -6,12 +6,17 @@ import type { AssetClass } from "@/lib/schema";
 
 /** One fixed color per asset class (defined in globals.css, with their own dark-mode steps) so a
  *  line means the same thing everywhere it's drawn. */
-export const ASSET_COLORS: Record<AssetClass, string> = {
+const ASSET_COLORS: Record<AssetClass, string> = {
   savings: "var(--asset-savings)",
   cd: "var(--asset-cd)",
   stocks: "var(--asset-stocks)",
   crypto: "var(--asset-crypto)",
 };
+
+/** Falls back to the text colour for a class this build doesn't know (see assetClassMeta). */
+export function assetColor(assetClass: AssetClass): string {
+  return Object.hasOwn(ASSET_COLORS, assetClass) ? ASSET_COLORS[assetClass] : "currentColor";
+}
 
 const WIDTH = 640;
 const HEIGHT = 260;

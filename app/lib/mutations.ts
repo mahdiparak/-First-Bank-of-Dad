@@ -801,8 +801,13 @@ export function allocateToInvestment(
   lockWeeks: number | undefined,
   actor: AuditActor,
 ): FamilyBankState {
-  if (amount <= 0) throw new Error("Amount must be positive.");
-  if (amount > availableBalanceForKid(state, kidId)) {
+  // Finite-check first: NaN fails every comparison below, so without this a non-numeric amount
+  // sails past both guards and opens a position whose principal poisons the balance forever.
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("Amount must be positive.");
+  // Compare at cent resolution: a balance that is $241.40 on screen can be 241.39999999999998 in
+  // floating point, and a raw `>` there rejects "invest all of it" with "that's more than the
+  // available balance" — while printing the exact same number back at the kid.
+  if (round2(amount) > round2(availableBalanceForKid(state, kidId))) {
     throw new Error("That's more than the available balance.");
   }
 

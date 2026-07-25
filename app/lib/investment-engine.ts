@@ -173,6 +173,14 @@ interface PositionDays {
   startDayT: number;
   /** values[d] = what the position was worth on day startDayT + d (values[0] = the principal). */
   values: number[];
+  /** The instant the series ends: now, or when the position was cashed out. */
+  endT: number;
+  /**
+   * The value AT endT rather than at that day's midnight. Savings/CD compound continuously, so
+   * midnight-today is a fraction below what the engine has stored for right now — using the day
+   * value would leave a chart ending a cent under the balance printed above it.
+   */
+  endValue: number;
 }
 
 /**
@@ -193,13 +201,18 @@ function positionDays(
   const endT = Math.max(openedT, Math.min(now.getTime(), closedT ?? now.getTime()));
   const days = Math.max(0, Math.round((startOfDayUTC(new Date(endT)).getTime() - startDayT) / DAY_MS));
 
+  // A closed position ends on the payout it actually paid out — an early-cashed CD forfeits its
+  // gains, and the chart has to show that rather than the value it would have had.
+  const closedValue = position.closedAt ? position.currentValue : undefined;
+
   if (position.assetClass === "savings" || position.assetClass === "cd") {
     const apr = position.assetClass === "savings" ? rates.hysaApr : rates.cdApr;
     const values = Array.from({ length: days + 1 }, (_, day) => {
       const weeks = Math.max(0, (startDayT + day * DAY_MS - openedT) / WEEK_MS);
       return round2(position.principal * Math.pow(1 + apr / 52, weeks));
     });
-    return { position, openedT, closedT, startDayT, values };
+    const endValue = closedValue ?? computeFixedRateValue(position, apr, new Date(endT));
+    return { position, openedT, closedT, startDayT, values, endT, endValue };
   }
 
   const assetClass = position.assetClass === "crypto" ? "crypto" : "stocks";
@@ -210,7 +223,8 @@ function positionDays(
     days,
     historicalReturnsFor(assetClass, marketData),
   );
-  return { position, openedT, closedT, startDayT, values };
+  // A market position only moves once a calendar day, so today's day value IS its value now.
+  return { position, openedT, closedT, startDayT, values, endT, endValue: closedValue ?? values[values.length - 1] };
 }
 
 /** The daily line for a single position: every day it has existed, ending at what it's worth now. */
@@ -222,14 +236,26 @@ export function positionValueSeries(
 ): ValuePoint[] {
   const days = positionDays(position, rates, marketData, now);
   const points: ValuePoint[] = days.values.map((value, day) => ({ t: days.startDayT + day * DAY_MS, value }));
-  // The first day starts the moment the money went in, not at that day's midnight — and a closed
-  // position ends on the payout it actually paid (an early-cashed CD forfeits its gains).
+  // The first day starts the moment the money went in, not at that day's midnight.
   points[0] = { t: days.openedT, value: round2(position.principal) };
-  const endT = Math.min(now.getTime(), days.closedT ?? now.getTime());
-  const endValue = position.closedAt ? position.currentValue : days.values[days.values.length - 1];
-  if (endT > points[points.length - 1].t) points.push({ t: endT, value: endValue });
-  else points[points.length - 1] = { t: endT, value: endValue };
+  const end = { t: days.endT, value: days.endValue };
+  if (end.t > points[points.length - 1].t) points.push(end);
+  else points[points.length - 1] = end;
   return points;
+}
+
+/**
+ * Drops positions whose timestamps aren't real dates. One unparseable `openedAt` would otherwise
+ * turn every min/max in the chart maths into NaN and blank the whole picture — better to leave one
+ * broken row out of the drawing (it still shows in the list, with its balance intact) than to lose
+ * every other position's line with it.
+ */
+function datedPositions(positions: InvestmentPosition[]): InvestmentPosition[] {
+  return positions.filter((position) => {
+    const openedT = new Date(position.openedAt).getTime();
+    const closedT = position.closedAt ? new Date(position.closedAt).getTime() : 0;
+    return Number.isFinite(openedT) && Number.isFinite(closedT) && Number.isFinite(position.principal);
+  });
 }
 
 export interface InvestedValueSampler {
@@ -251,7 +277,7 @@ export function sampleInvestedValues(
   marketData: MarketDataResponse | null,
   now: Date = new Date(),
 ): InvestedValueSampler {
-  const prepared = positions.map((position) => positionDays(position, rates, marketData, now));
+  const prepared = datedPositions(positions).map((position) => positionDays(position, rates, marketData, now));
   const days = new Set<number>();
   for (const entry of prepared) {
     for (let day = 0; day < entry.values.length; day++) days.add(entry.startDayT + day * DAY_MS);
@@ -265,6 +291,12 @@ export function sampleInvestedValues(
       for (const entry of prepared) {
         if (entry.openedT > tMs) continue;
         if (entry.closedT !== undefined && entry.closedT <= tMs) continue;
+        // At (or past) the end of the series, use the exact end value rather than that day's
+        // midnight figure, so "right now" agrees to the cent with the stored balance.
+        if (tMs >= entry.endT) {
+          total += entry.endValue;
+          continue;
+        }
         const index = Math.min(Math.max(Math.round((dayT - entry.startDayT) / DAY_MS), 0), entry.values.length - 1);
         total += entry.values[index];
       }
@@ -291,11 +323,12 @@ export function investmentHistory(
   marketData: MarketDataResponse | null,
   now: Date = new Date(),
 ): InvestmentHistory {
-  if (positions.length === 0) return { value: [], invested: [] };
+  const dated = datedPositions(positions);
+  if (dated.length === 0) return { value: [], invested: [] };
 
   const nowT = now.getTime();
-  const sampler = sampleInvestedValues(positions, rates, marketData, now);
-  const moments = positions.flatMap((position) => [
+  const sampler = sampleInvestedValues(dated, rates, marketData, now);
+  const moments = dated.flatMap((position) => [
     new Date(position.openedAt).getTime(),
     ...(position.closedAt ? [new Date(position.closedAt).getTime()] : []),
   ]);
@@ -306,7 +339,7 @@ export function investmentHistory(
 
   const investedAt = (tMs: number) =>
     round2(
-      positions.reduce((sum, position) => {
+      dated.reduce((sum, position) => {
         const openedT = new Date(position.openedAt).getTime();
         const closedT = position.closedAt ? new Date(position.closedAt).getTime() : undefined;
         const held = openedT <= tMs && (closedT === undefined || closedT > tMs);

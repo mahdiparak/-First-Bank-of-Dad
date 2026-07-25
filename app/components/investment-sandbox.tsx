@@ -12,6 +12,7 @@ import {
 } from "@/lib/mutations";
 import {
   ASSET_CLASSES,
+  assetClassMeta,
   kidColor,
   type AssetClass,
   type AssetClassMeta,
@@ -22,7 +23,7 @@ import {
 } from "@/lib/schema";
 import { SimulationChart, Sparkline } from "./charts";
 import { InvestConfirmDialog } from "./invest-confirm";
-import { ASSET_COLORS, InvestmentPlot } from "./investment-plot";
+import { assetColor, InvestmentPlot } from "./investment-plot";
 
 const ASSET_CLASS_ORDER: AssetClass[] = ["savings", "cd", "stocks", "crypto"];
 
@@ -136,8 +137,8 @@ function MyInvestments({
 
   const value = open.reduce((sum, position) => sum + position.currentValue, 0);
   const invested = open.reduce((sum, position) => sum + position.principal, 0);
-  const color = activeView === "all" ? kidColor(kid) : ASSET_COLORS[activeView];
-  const label = activeView === "all" ? "All my investments" : ASSET_CLASSES[activeView].shortLabel;
+  const color = activeView === "all" ? kidColor(kid) : assetColor(activeView);
+  const label = activeView === "all" ? "All my investments" : assetClassMeta(activeView).shortLabel;
 
   return (
     <section className="space-y-4 rounded-xl border border-black/10 p-4 dark:border-white/10">
@@ -219,7 +220,7 @@ function PositionRow({
   actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
-  const meta = ASSET_CLASSES[position.assetClass];
+  const meta = assetClassMeta(position.assetClass);
   const minHoldDays = state.parentSettings.investmentMinHoldDays ?? 0;
   const unlocked = canCashOutInvestment(position, minHoldDays);
   const maturesAt = position.maturesAt ? new Date(position.maturesAt) : null;
@@ -259,7 +260,7 @@ function PositionRow({
       </div>
 
       {series.length > 2 ? (
-        <div style={{ color: ASSET_COLORS[position.assetClass] }}>
+        <div style={{ color: assetColor(position.assetClass) }}>
           <Sparkline values={series} color="currentColor" baseline={position.principal} />
         </div>
       ) : (
@@ -272,7 +273,9 @@ function PositionRow({
             onClick={handleCashOut}
             className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
           >
-            Cash out
+            {/* A CD past its minimum hold *can* be cashed out — it just costs the interest. Say so
+                on the button rather than springing it in the confirmation. */}
+            {isLockedCd ? "Cash out early (lose the interest)" : "Cash out"}
           </button>
         ) : (
           <span className="inline-block rounded-md bg-black/[0.04] px-2 py-1 text-xs opacity-60 dark:bg-white/[0.08]">
@@ -308,6 +311,10 @@ function NewInvestment({
 
   const minHoldDays = state.parentSettings.investmentMinHoldDays ?? 0;
   const amountValue = Number(amount) || 0;
+  // Everything compares at cent resolution, matching the mutation's own guard — otherwise a
+  // balance that reads $241.40 but is really 241.39999999999998 makes "invest all of it" look
+  // like it's over budget.
+  const overBudget = round2(amountValue) > round2(available);
   // The simulation always has something to show — before an amount is typed it demonstrates the
   // ride with a round $100, which is the part of the answer that doesn't depend on the amount.
   const simPrincipal = amountValue > 0 ? amountValue : 100;
@@ -351,15 +358,15 @@ function NewInvestment({
               aria-pressed={active}
               className="rounded-xl border-2 p-3 text-left"
               style={{
-                borderColor: active ? ASSET_COLORS[assetClass] : "rgb(128 128 128 / 0.25)",
-                backgroundColor: active ? `color-mix(in srgb, ${ASSET_COLORS[assetClass]} 10%, transparent)` : undefined,
+                borderColor: active ? assetColor(assetClass) : "rgb(128 128 128 / 0.25)",
+                backgroundColor: active ? `color-mix(in srgb, ${assetColor(assetClass)} 10%, transparent)` : undefined,
               }}
             >
               <p className="text-sm font-medium">
                 {meta.emoji} {meta.label}
               </p>
               <p className="text-xs opacity-70">{meta.description}</p>
-              <p className="mt-1 text-xs font-medium" style={{ color: ASSET_COLORS[assetClass] }}>
+              <p className="mt-1 text-xs font-medium" style={{ color: assetColor(assetClass) }}>
                 {RIDE_LABELS[meta.ride]}
                 {assetClass === "savings" && ` · ${formatPercent(state.parentSettings.hysaApr)} a year`}
                 {assetClass === "cd" && ` · ${formatPercent(state.parentSettings.cdApr)} a year`}
@@ -503,7 +510,7 @@ function NewInvestment({
           <div className="space-y-1 border-t border-black/10 pt-3 dark:border-white/10">
             <button
               type="button"
-              disabled={amountValue <= 0 || amountValue > available}
+              disabled={amountValue <= 0 || overBudget}
               onClick={() => setConfirming(true)}
               className="w-full rounded-md bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-black"
             >
@@ -511,7 +518,7 @@ function NewInvestment({
                 ? `Invest ${formatCurrency(amountValue)} in ${ASSET_CLASSES[selected].shortLabel} for real`
                 : `Type an amount to invest in ${ASSET_CLASSES[selected].shortLabel}`}
             </button>
-            {amountValue > available && (
+            {overBudget && (
               <p className="text-xs text-red-500">
                 You only have {formatCurrency(available)} available right now.
               </p>
