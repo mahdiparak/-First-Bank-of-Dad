@@ -1,3 +1,5 @@
+import { sampleInvestedValues } from "./investment-engine";
+import type { MarketDataResponse } from "./market-data";
 import { virtualBalanceForKid } from "./mutations";
 import type { FamilyBankState, KidProfile } from "./schema";
 
@@ -52,15 +54,19 @@ export interface TimelineOptions {
   simKind?: SimKind;
   /** Weekly growth rate used for the invest sim (derived from real market history). */
   investWeeklyRate?: number;
+  /** Real market history, so open investments move on the line the same way they move for real. */
+  marketData?: MarketDataResponse | null;
   now?: Date;
 }
 
 /**
  * Builds the kid's money-over-time picture.
  *
- * From the app's first recorded transaction onward, the line is REAL: cumulative cash plus the
- * principal of open investment positions, stepping at every event (each non-routine event also
- * becomes an emoji annotation). Before that first record, the line is a model: we back-calculate
+ * From the app's first recorded transaction onward, the line is REAL: cumulative cash plus what
+ * the open investment positions are worth *that day*, stepping at every transaction and at every
+ * day an investment was open — so a rollercoaster week shows up as a rollercoaster week on the
+ * main money story, not as a flat line at the amount that was put in. Each non-routine event also
+ * becomes an emoji annotation. Before the first record, the line is a model: we back-calculate
  * what the kid must have held in Jan 2025 for weekly allowance + interest to land exactly on the
  * first recorded balance. The future continues the model forward from today's actual balance.
  */
@@ -81,33 +87,44 @@ export function buildMoneyTimeline(
     .slice()
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   const positions = state.investments.filter((position) => position.kidId === kid.id);
+  const invested = sampleInvestedValues(positions, state.parentSettings, options.marketData ?? null, now);
 
-  const principalAt = (tMs: number) =>
-    positions.reduce((sum, position) => {
-      const opened = new Date(position.openedAt).getTime() <= tMs;
-      const closed = position.closedAt && new Date(position.closedAt).getTime() <= tMs;
-      return sum + (opened && !closed ? position.principal : 0);
-    }, 0);
+  const transactionTimes = transactions.map((transaction) =>
+    Math.min(new Date(transaction.createdAt).getTime(), todayT),
+  );
+  // Sample at every transaction *and* at every day an investment was open — the extra days are
+  // what let a position's ups and downs show up between one transaction and the next. Investment
+  // days before the first transaction are dropped: that's where the modeled segment anchors, and
+  // a position can't predate the transaction that funded it anyway.
+  const firstT = transactionTimes[0] ?? todayT;
+  const sampleTimes = Array.from(
+    new Set([...transactionTimes, ...invested.days.filter((day) => day > firstT && day <= todayT)]),
+  ).sort((a, b) => a - b);
 
   const real: TimelinePoint[] = [];
   const events: TimelineEvent[] = [];
   let cash = 0;
-  for (const transaction of transactions) {
-    cash += transaction.amount;
-    const tMs = Math.min(new Date(transaction.createdAt).getTime(), todayT);
-    const value = round2(cash + principalAt(tMs));
-    if (real.length > 0 && real[real.length - 1].t === tMs) {
-      real[real.length - 1] = { t: tMs, value };
-    } else {
-      real.push({ t: tMs, value });
+  let next = 0;
+  for (const tMs of sampleTimes) {
+    while (next < transactions.length && transactionTimes[next] <= tMs) {
+      const transaction = transactions[next];
+      cash += transaction.amount;
+      // Allowance, its tax withholding, and interest are the line's slope, not standout moments —
+      // annotating every week would bury the events kids should actually notice. A tax *refund*
+      // (positive amount) is still worth calling out.
+      const isRoutineTaxWithholding = transaction.source === "tax" && transaction.amount < 0;
+      if (transaction.source !== "allowance" && transaction.source !== "interest" && !isRoutineTaxWithholding) {
+        const at = transactionTimes[next];
+        events.push({
+          t: at,
+          value: round2(cash + invested.valueAt(at)),
+          emoji: transaction.category,
+          label: transaction.memo ?? transaction.source,
+        });
+      }
+      next++;
     }
-    // Allowance, its tax withholding, and interest are the line's slope, not standout moments —
-    // annotating every week would bury the events kids should actually notice. A tax *refund*
-    // (positive amount) is still worth calling out.
-    const isRoutineTaxWithholding = transaction.source === "tax" && transaction.amount < 0;
-    if (transaction.source !== "allowance" && transaction.source !== "interest" && !isRoutineTaxWithholding) {
-      events.push({ t: tMs, value, emoji: transaction.category, label: transaction.memo ?? transaction.source });
-    }
+    real.push({ t: tMs, value: round2(cash + invested.valueAt(tMs)) });
   }
 
   // --- Modeled segment: Jan 2025 up to the first real record ---

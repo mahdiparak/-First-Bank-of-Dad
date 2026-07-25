@@ -3,6 +3,14 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* One fixed color per asset class, used by every investment chart so a line always means the
+     same thing. Checked as a set for colorblind separation and contrast against both surfaces —
+     the dark values are their own steps for the dark background, not an automatic flip. */
+  --asset-savings: #2a78d6;
+  --asset-cd: #eb6834;
+  --asset-stocks: #1baf7a;
+  --asset-crypto: #eda100;
 }
 
 @theme inline {
@@ -16,6 +24,11 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+
+    --asset-savings: #3987e5;
+    --asset-cd: #d95926;
+    --asset-stocks: #199e70;
+    --asset-crypto: #c98500;
   }
 }
 

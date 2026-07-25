@@ -66,13 +66,36 @@ function seededDailyReturn(assetClass: "stocks" | "crypto", date: Date, mean: nu
   return Math.max(-0.4, Math.min(0.4, mean + std * z));
 }
 
+const WEEK_MS = 7 * DAY_MS;
+
 /** Fixed-rate compounding (Savings/CD) — pure function of elapsed time, safe to recompute anywhere. */
 export function computeFixedRateValue(position: InvestmentPosition, apr: number, now: Date): number {
-  const weeksElapsed = Math.max(
-    0,
-    (now.getTime() - new Date(position.openedAt).getTime()) / (7 * 24 * 60 * 60 * 1000),
-  );
+  const weeksElapsed = Math.max(0, (now.getTime() - new Date(position.openedAt).getTime()) / WEEK_MS);
   return round2(position.principal * Math.pow(1 + apr / 52, weeksElapsed));
+}
+
+/**
+ * The whole daily walk, day 0 (the principal) through `days`. Everything about a market position's
+ * worth — today's number, yesterday's, the line on the chart — comes out of this one function, so
+ * the chart can never disagree with the balance it's drawn under.
+ */
+function marketDailyWalk(
+  assetClass: "stocks" | "crypto",
+  principal: number,
+  startDay: Date,
+  days: number,
+  historicalReturns: number[],
+): number[] {
+  const { mean, std } = dailyStatsFromMonthly(historicalReturns);
+  const values = [round2(principal)];
+  let value = principal;
+  for (let day = 1; day <= days; day++) {
+    const date = new Date(startDay.getTime() + day * DAY_MS);
+    value *= 1 + seededDailyReturn(assetClass, date, mean, std);
+    value = Math.max(0.01, value); // a position can crater, but never to $0 or negative
+    values.push(round2(value));
+  }
+  return values;
 }
 
 /**
@@ -86,15 +109,8 @@ export function computeMarketValue(position: InvestmentPosition, historicalRetur
   const startDay = startOfDayUTC(new Date(position.openedAt));
   const daysElapsed = Math.round((startOfDayUTC(now).getTime() - startDay.getTime()) / DAY_MS);
   if (daysElapsed <= 0) return round2(position.principal);
-
-  const { mean, std } = dailyStatsFromMonthly(historicalReturns);
-  let value = position.principal;
-  for (let day = 1; day <= daysElapsed; day++) {
-    const date = new Date(startDay.getTime() + day * DAY_MS);
-    value *= 1 + seededDailyReturn(assetClass, date, mean, std);
-    if (value < 0.01) return 0.01; // a position can crater, but never to $0 or negative
-  }
-  return round2(value);
+  const walk = marketDailyWalk(assetClass, position.principal, startDay, daysElapsed, historicalReturns);
+  return walk[walk.length - 1];
 }
 
 function historicalReturnsFor(assetClass: "stocks" | "crypto", marketData: MarketDataResponse | null): number[] {
@@ -139,6 +155,171 @@ export function runInvestmentEngine(
   return { ...state, investments };
 }
 
+export interface ValuePoint {
+  t: number; // ms since epoch
+  value: number;
+}
+
+export interface AssetRates {
+  hysaApr: number;
+  cdApr: number;
+}
+
+interface PositionDays {
+  position: InvestmentPosition;
+  openedT: number;
+  closedT?: number;
+  /** UTC midnight of the day the position opened — index 0 of `values`. */
+  startDayT: number;
+  /** values[d] = what the position was worth on day startDayT + d (values[0] = the principal). */
+  values: number[];
+}
+
+/**
+ * Replays one position day by day, from the day it opened through today (or the day it closed).
+ * Savings/CD compound smoothly; stocks/crypto ride the same seeded daily walk that decides their
+ * stored value, so a chart drawn from this lands exactly on the number in the balance.
+ */
+function positionDays(
+  position: InvestmentPosition,
+  rates: AssetRates,
+  marketData: MarketDataResponse | null,
+  now: Date,
+): PositionDays {
+  const openedT = new Date(position.openedAt).getTime();
+  const closedT = position.closedAt ? new Date(position.closedAt).getTime() : undefined;
+  const startDay = startOfDayUTC(new Date(openedT));
+  const startDayT = startDay.getTime();
+  const endT = Math.max(openedT, Math.min(now.getTime(), closedT ?? now.getTime()));
+  const days = Math.max(0, Math.round((startOfDayUTC(new Date(endT)).getTime() - startDayT) / DAY_MS));
+
+  if (position.assetClass === "savings" || position.assetClass === "cd") {
+    const apr = position.assetClass === "savings" ? rates.hysaApr : rates.cdApr;
+    const values = Array.from({ length: days + 1 }, (_, day) => {
+      const weeks = Math.max(0, (startDayT + day * DAY_MS - openedT) / WEEK_MS);
+      return round2(position.principal * Math.pow(1 + apr / 52, weeks));
+    });
+    return { position, openedT, closedT, startDayT, values };
+  }
+
+  const assetClass = position.assetClass === "crypto" ? "crypto" : "stocks";
+  const values = marketDailyWalk(
+    assetClass,
+    position.principal,
+    startDay,
+    days,
+    historicalReturnsFor(assetClass, marketData),
+  );
+  return { position, openedT, closedT, startDayT, values };
+}
+
+/** The daily line for a single position: every day it has existed, ending at what it's worth now. */
+export function positionValueSeries(
+  position: InvestmentPosition,
+  rates: AssetRates,
+  marketData: MarketDataResponse | null,
+  now: Date = new Date(),
+): ValuePoint[] {
+  const days = positionDays(position, rates, marketData, now);
+  const points: ValuePoint[] = days.values.map((value, day) => ({ t: days.startDayT + day * DAY_MS, value }));
+  // The first day starts the moment the money went in, not at that day's midnight — and a closed
+  // position ends on the payout it actually paid (an early-cashed CD forfeits its gains).
+  points[0] = { t: days.openedT, value: round2(position.principal) };
+  const endT = Math.min(now.getTime(), days.closedT ?? now.getTime());
+  const endValue = position.closedAt ? position.currentValue : days.values[days.values.length - 1];
+  if (endT > points[points.length - 1].t) points.push({ t: endT, value: endValue });
+  else points[points.length - 1] = { t: endT, value: endValue };
+  return points;
+}
+
+export interface InvestedValueSampler {
+  /** What this kid's open positions were worth, all together, at a given moment. */
+  valueAt: (tMs: number) => number;
+  /** Every UTC midnight on which at least one position was open — the days worth plotting. */
+  days: number[];
+}
+
+/**
+ * Prepares every position's daily walk once, then answers "what were the investments worth at
+ * time t" cheaply. A position counts from the moment it opened (before that its money is still
+ * cash) until the moment it closed (after that the payout is back in cash) — so a timeline built
+ * on this never double-counts a dollar on the day it moves.
+ */
+export function sampleInvestedValues(
+  positions: InvestmentPosition[],
+  rates: AssetRates,
+  marketData: MarketDataResponse | null,
+  now: Date = new Date(),
+): InvestedValueSampler {
+  const prepared = positions.map((position) => positionDays(position, rates, marketData, now));
+  const days = new Set<number>();
+  for (const entry of prepared) {
+    for (let day = 0; day < entry.values.length; day++) days.add(entry.startDayT + day * DAY_MS);
+  }
+
+  return {
+    days: Array.from(days).sort((a, b) => a - b),
+    valueAt: (tMs: number) => {
+      const dayT = startOfDayUTC(new Date(tMs)).getTime();
+      let total = 0;
+      for (const entry of prepared) {
+        if (entry.openedT > tMs) continue;
+        if (entry.closedT !== undefined && entry.closedT <= tMs) continue;
+        const index = Math.min(Math.max(Math.round((dayT - entry.startDayT) / DAY_MS), 0), entry.values.length - 1);
+        total += entry.values[index];
+      }
+      return round2(total);
+    },
+  };
+}
+
+export interface InvestmentHistory {
+  /** What the positions were worth, day by day. */
+  value: ValuePoint[];
+  /** What had been put into them at that same moment — the line the value is measured against. */
+  invested: ValuePoint[];
+}
+
+/**
+ * The two lines behind every "how is my investment doing" chart: what it's worth each day, and
+ * what was put in. Samples every day plus the exact moments money moved in or out, so opening a
+ * second position or cashing one out shows up as the step it actually is.
+ */
+export function investmentHistory(
+  positions: InvestmentPosition[],
+  rates: AssetRates,
+  marketData: MarketDataResponse | null,
+  now: Date = new Date(),
+): InvestmentHistory {
+  if (positions.length === 0) return { value: [], invested: [] };
+
+  const nowT = now.getTime();
+  const sampler = sampleInvestedValues(positions, rates, marketData, now);
+  const moments = positions.flatMap((position) => [
+    new Date(position.openedAt).getTime(),
+    ...(position.closedAt ? [new Date(position.closedAt).getTime()] : []),
+  ]);
+  const firstT = Math.min(...moments);
+  const times = Array.from(new Set([...moments, ...sampler.days, nowT]))
+    .filter((t) => t >= firstT && t <= nowT)
+    .sort((a, b) => a - b);
+
+  const investedAt = (tMs: number) =>
+    round2(
+      positions.reduce((sum, position) => {
+        const openedT = new Date(position.openedAt).getTime();
+        const closedT = position.closedAt ? new Date(position.closedAt).getTime() : undefined;
+        const held = openedT <= tMs && (closedT === undefined || closedT > tMs);
+        return sum + (held ? position.principal : 0);
+      }, 0),
+    );
+
+  return {
+    value: times.map((t) => ({ t, value: sampler.valueAt(t) })),
+    invested: times.map((t) => ({ t, value: investedAt(t) })),
+  };
+}
+
 export interface WhatIfResult {
   values: number[]; // ending value after each simulated month, values[0] is month 1
   endingValue: number;
@@ -174,4 +355,51 @@ export function simulateWhatIf(
     values.push(round2(value));
   }
   return { values, endingValue: values[values.length - 1], minValue: Math.min(...values), maxValue: Math.max(...values) };
+}
+
+export interface WhatIfBand {
+  /** Three real runs, each starting at the principal (index 0 = today, then one point per month). */
+  typical: number[];
+  best: number[];
+  worst: number[];
+  /** True for Savings/CD, where the rate is fixed and all three runs are the same line. */
+  guaranteed: boolean;
+  /** Share of runs that ended below what was put in, 0–1. */
+  chanceOfLoss: number;
+  runs: number;
+}
+
+const WHAT_IF_RUNS = 250;
+
+/**
+ * Runs the same what-if many times over and keeps three of the actual runs — the worst, the
+ * middle, and the best. One random line invites "so that's what happens"; three lines from the
+ * same choice are the honest answer: nobody knows which one you get.
+ */
+export function simulateWhatIfBand(
+  assetClass: AssetClass,
+  principal: number,
+  weeks: number,
+  parentSettings: AssetRates,
+  marketData: MarketDataResponse | null,
+): WhatIfBand {
+  const single = () => [round2(principal), ...simulateWhatIf(assetClass, principal, weeks, parentSettings, marketData).values];
+
+  if (assetClass === "savings" || assetClass === "cd") {
+    const path = single();
+    return { typical: path, best: path, worst: path, guaranteed: true, chanceOfLoss: 0, runs: 1 };
+  }
+
+  const paths = Array.from({ length: WHAT_IF_RUNS }, single).sort(
+    (a, b) => a[a.length - 1] - b[b.length - 1],
+  );
+  const losses = paths.filter((path) => path[path.length - 1] < principal).length;
+  return {
+    worst: paths[0],
+    typical: paths[Math.floor(paths.length / 2)],
+    best: paths[paths.length - 1],
+    guaranteed: false,
+    chanceOfLoss: losses / paths.length,
+    runs: paths.length,
+  };
 }

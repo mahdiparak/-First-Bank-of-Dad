@@ -192,11 +192,54 @@ export interface InvestmentPosition {
   closedAt?: string;
 }
 
-export const ASSET_CLASSES: Record<AssetClass, { label: string; description: string }> = {
-  savings: { label: "Savings (The Bicycle)", description: "Steady and safe — the real HYSA rate, no crashes." },
-  cd: { label: "CD (The Time Vault)", description: "A higher fixed rate, but your money is locked up for a while." },
-  stocks: { label: "Stocks (The Rollercoaster)", description: "Ups and downs like the real stock market." },
-  crypto: { label: "Crypto (The Rocket Booster)", description: "Huge swings — big gains, big drops." },
+export interface AssetClassMeta {
+  label: string;
+  /** The short name on its own, without the nickname — for tight spots like a chart legend. */
+  shortLabel: string;
+  emoji: string;
+  description: string;
+  /** The plain-English "what is this, really" a kid reads before choosing it. */
+  howItWorks: string;
+  ride: "flat" | "gentle" | "bumpy" | "wild";
+}
+
+export const ASSET_CLASSES: Record<AssetClass, AssetClassMeta> = {
+  savings: {
+    label: "Savings (The Bicycle)",
+    shortLabel: "Savings",
+    emoji: "🚲",
+    description: "Steady and safe — the real HYSA rate, no crashes.",
+    howItWorks:
+      "The bank pays you a little bit every week just for leaving your money there. It never goes down — it just climbs, slowly, like pedaling a bike. You can take it out whenever you want.",
+    ride: "flat",
+  },
+  cd: {
+    label: "CD (The Time Vault)",
+    shortLabel: "CD",
+    emoji: "🔒",
+    description: "A higher fixed rate, but your money is locked up for a while.",
+    howItWorks:
+      "You promise the bank you won't touch your money for a set number of weeks. Because you promised, it pays you a better rate than plain savings. Break the promise early and you keep your money, but you lose the extra you earned.",
+    ride: "gentle",
+  },
+  stocks: {
+    label: "Stocks (The Rollercoaster)",
+    shortLabel: "Stocks",
+    emoji: "🎢",
+    description: "Ups and downs like the real stock market.",
+    howItWorks:
+      "You own a tiny slice of real companies. Some days that slice is worth more, some days less — this app moves it using how the real stock market has actually behaved. Over a long time it usually goes up, but there is no promise, and some weeks are scary.",
+    ride: "bumpy",
+  },
+  crypto: {
+    label: "Crypto (The Rocket Booster)",
+    shortLabel: "Crypto",
+    emoji: "🚀",
+    description: "Huge swings — big gains, big drops.",
+    howItWorks:
+      "The wildest ride here. It can jump way up in a week and fall just as far the next. People have made a lot and lost a lot. Only put in money you'd be OK watching shrink for a while.",
+    ride: "wild",
+  },
 };
 
 export type WithdrawalStatus = "pending" | "approved" | "denied";

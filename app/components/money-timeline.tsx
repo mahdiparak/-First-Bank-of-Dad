@@ -63,8 +63,9 @@ export function MoneyTimeline({
         simAmount: activeSim?.amount,
         simKind: activeSim?.kind,
         investWeeklyRate,
+        marketData,
       }),
-    [state, kid, activeSim, investWeeklyRate],
+    [state, kid, activeSim, investWeeklyRate, marketData],
   );
   const color = kidColor(kid);
   const balance = timeline.past[timeline.past.length - 1].value;
@@ -75,12 +76,15 @@ export function MoneyTimeline({
   const selectedRange = RANGES.find((entry) => entry.id === range);
   const FUTURE_MIN_MS = 182 * DAY_MS; // the impact of a withdrawal/deposit needs real runway to read as a story
   const FUTURE_MAX_MS = 365 * DAY_MS;
-  // Range tabs zoom the lookback window, but the projection — the whole point of "what if I…" —
-  // always gets at least 6 months of runway (scaling up to a year for the wider lookbacks) so the
-  // impact of a withdrawal or deposit is never zoomed out of view.
-  const tMax = selectedRange?.days
-    ? Math.min(fullMax, timeline.todayT + Math.min(FUTURE_MAX_MS, Math.max(FUTURE_MIN_MS, selectedRange.days * DAY_MS * 2)))
-    : fullMax;
+  // Range tabs zoom the lookback window. With a what-if running, the projection — the whole point
+  // of "what if I…" — gets at least 6 months of runway (up to a year for wider lookbacks) so the
+  // impact of a withdrawal or deposit is never zoomed out of view. With no sim running there's
+  // nothing to compare against out there, and a long flat dotted tail would squeeze the real,
+  // moving part of the line (investments included) into a sliver — so it gets a short runway.
+  const futureRunwayMs = activeSim
+    ? Math.min(FUTURE_MAX_MS, Math.max(FUTURE_MIN_MS, (selectedRange?.days ?? 0) * DAY_MS * 2))
+    : Math.max(7 * DAY_MS, (selectedRange?.days ?? 0) * DAY_MS * 0.3);
+  const tMax = selectedRange?.days ? Math.min(fullMax, timeline.todayT + futureRunwayMs) : fullMax;
   const tMin = selectedRange?.days ? Math.max(fullMin, timeline.todayT - selectedRange.days * DAY_MS) : fullMin;
 
   const visiblePast = clipToWindow(timeline.past, tMin, tMax);
@@ -204,8 +208,9 @@ export function MoneyTimeline({
     <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
       <h2 className="font-semibold">📈 My Money Story</h2>
       <p className="text-xs opacity-60">
-        Every deposit, chore, spend, and investment lands on this line. Solid: since Jan 2025 (starting near{" "}
-        {formatCurrency(timeline.startingBalance)}). Dotted: where you&apos;re headed.
+        Every deposit, chore, spend, and investment lands on this line — including your investments&apos; day-to-day ups
+        and downs. Solid: since Jan 2025 (starting near {formatCurrency(timeline.startingBalance)}). Dotted: where
+        you&apos;re headed.
       </p>
 
       <div className="flex overflow-hidden rounded-md border border-black/20 dark:border-white/20 w-fit">
