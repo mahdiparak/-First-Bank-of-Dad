@@ -119,7 +119,7 @@ export function KidDashboard({
         <InvestmentSandbox state={state} kid={kid} marketData={marketData} actor={actor} onMutate={tryMutate} />
       )}
       {tab === "quests" && <QuestBoard bounties={state.bounties} kid={kid} actor={actor} onMutate={tryMutate} />}
-      {tab === "ledger" && <Ledger state={state} kid={kid} role={role} onMutate={tryMutate} />}
+      {tab === "ledger" && <Ledger state={state} kid={kid} role={role} actor={actor} onMutate={tryMutate} />}
     </div>
   );
 }
@@ -359,7 +359,7 @@ function YoungKidHome({
         </section>
       )}
 
-      <YoungSpendForm state={state} kid={kid} available={available} onMutate={onMutate} />
+      <YoungSpendForm state={state} kid={kid} available={available} actor={actor} onMutate={onMutate} />
 
       {recent.length > 0 && (
         <section className="space-y-2 rounded-3xl border border-black/10 p-5 dark:border-white/10">
@@ -410,16 +410,19 @@ function YoungSpendForm({
   state,
   kid,
   available,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   available: number;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [category, setCategory] = useState<string>(SPENDING_CATEGORIES[0].emoji);
   const [amount, setAmount] = useState("");
   const [asked, setAsked] = useState(false);
+  const [planned, setPlanned] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
   function handleAsk(event: React.FormEvent) {
@@ -432,6 +435,16 @@ function YoungSpendForm({
     onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category));
     setAmount("");
     setAsked(true);
+    setPlanned(false);
+    setConfirming(false);
+  }
+
+  /** They chose the plan over the spend: no withdrawal is requested at all, just a new goal. */
+  function handlePlanInstead(name: string, weeklyContribution: number) {
+    onMutate((s) => createGoal(s, kid.id, name, Number(amount), actor, weeklyContribution));
+    setAmount("");
+    setPlanned(true);
+    setAsked(false);
     setConfirming(false);
   }
 
@@ -473,13 +486,16 @@ function YoungSpendForm({
       </form>
       <WithdrawalPreview state={state} kid={kid} amount={Number(amount) || 0} young />
       {asked && <p className="text-sm text-green-600">Sent! Dad will say yes or no. 🕐</p>}
+      {planned && <p className="text-sm text-green-600">Nice — it&apos;s a goal now. Check 🎯 to watch it fill up!</p>}
       {confirming && (
         <WithdrawalConfirmDialog
           state={state}
           kid={kid}
           amount={Number(amount) || 0}
+          suggestedGoalName={categoryLabel(category)}
           onConfirm={handleConfirm}
           onCancel={() => setConfirming(false)}
+          onPlanInstead={handlePlanInstead}
           young
         />
       )}
@@ -766,17 +782,20 @@ function Ledger({
   state,
   kid,
   role,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   role: "parent" | "kid";
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<string>(SPENDING_CATEGORIES[0].emoji);
   const [memo, setMemo] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [planned, setPlanned] = useState<string | null>(null);
   const now = new Date();
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
 
@@ -792,6 +811,16 @@ function Ledger({
 
   function handleConfirm() {
     onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category, memo.trim() || undefined));
+    setAmount("");
+    setMemo("");
+    setPlanned(null);
+    setConfirming(false);
+  }
+
+  /** They took the other door: this becomes a savings goal, and no withdrawal is requested. */
+  function handlePlanInstead(name: string, weeklyContribution: number) {
+    onMutate((s) => createGoal(s, kid.id, name, Number(amount), actor, weeklyContribution));
+    setPlanned(name);
     setAmount("");
     setMemo("");
     setConfirming(false);
@@ -864,6 +893,11 @@ function Ledger({
         </button>
       </form>
       <p className="text-xs opacity-60">Sends a request to Dad — the money leaves your balance once approved.</p>
+      {planned && (
+        <p className="text-xs text-green-600">
+          Saved as a goal — &ldquo;{planned}&rdquo; is on your 🎯 Goals tab now, filling up every payday.
+        </p>
+      )}
       <WithdrawalPreview state={state} kid={kid} amount={Number(amount) || 0} />
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-black/10 pt-3 dark:border-white/10">
@@ -958,12 +992,19 @@ function Ledger({
           state={state}
           kid={kid}
           amount={Number(amount) || 0}
+          suggestedGoalName={memo.trim() || categoryLabel(category)}
           onConfirm={handleConfirm}
           onCancel={() => setConfirming(false)}
+          onPlanInstead={handlePlanInstead}
         />
       )}
     </section>
   );
+}
+
+/** The plain-English name behind a spending category emoji, used to pre-fill a goal's name. */
+function categoryLabel(emoji: string): string {
+  return SPENDING_CATEGORIES.find((entry) => entry.emoji === emoji)?.label ?? "";
 }
 
 function sourceLabel(source: string): string {

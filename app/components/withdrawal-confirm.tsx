@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import { streakWeekDate, weeksWithoutWithdrawalFor } from "@/lib/allowance";
+import { estimateGoalSchedule } from "@/lib/goal-schedule";
 import { buildMoneyTimeline, type TimelinePoint } from "@/lib/timeline";
 import { totalTaxPaidForKid } from "@/lib/mutations";
 import type { FamilyBankState, KidProfile } from "@/lib/schema";
@@ -22,15 +25,21 @@ export function WithdrawalConfirmDialog({
   state,
   kid,
   amount,
+  suggestedGoalName,
   onConfirm,
   onCancel,
+  onPlanInstead,
   young = false,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
   amount: number;
+  /** What they said they wanted it for — becomes the goal's name if they plan it instead. */
+  suggestedGoalName?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Turns this request into a savings goal with a weekly auto-save, instead of a withdrawal. */
+  onPlanInstead: (name: string, weeklyContribution: number) => void;
   young?: boolean;
 }) {
   const timeline = buildMoneyTimeline(state, kid, { simAmount: amount, simKind: "withdraw" });
@@ -48,6 +57,15 @@ export function WithdrawalConfirmDialog({
       ? `it would take more than 5 years to grow back to ${formatCurrency(balance)} at your current allowance and rate`
       : `it would take about ${timeline.recoveryWeeks} week${timeline.recoveryWeeks === 1 ? "" : "s"} to grow back to ${formatCurrency(balance)}`;
   const oneYearGap = timeline.oneYearBaseline - (timeline.oneYearSim ?? timeline.oneYearBaseline);
+
+  // What restarting the streak actually costs: the weeks already banked, and the next Dad Match
+  // bonus — which doesn't just get delayed, it goes back to being its full length away.
+  const streakWeeks = weeksWithoutWithdrawalFor(state, kid.id);
+  const nextMilestone = state.parentSettings.dadMatchMilestones
+    .filter((milestone) => milestone.weeks > streakWeeks)
+    .sort((a, b) => a.weeks - b.weeks)[0];
+  const weeksToBonus = nextMilestone ? nextMilestone.weeks - streakWeeks : 0;
+  const bonusDate = nextMilestone ? streakWeekDate(state, kid.id, nextMilestone.weeks) : null;
 
   const tMin = future[0].t;
   const tMax = future[future.length - 1].t;
@@ -131,9 +149,37 @@ export function WithdrawalConfirmDialog({
             In a year, that&apos;s about {formatCurrency(oneYearGap)} less than if it had kept growing.
           </p>
         )}
+        {(streakWeeks > 0 || nextMilestone) && (
+          <div className="space-y-1 rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm">
+            <p className="font-medium">🔥 This restarts your streak</p>
+            {streakWeeks > 0 && (
+              <p className="opacity-80">
+                {streakWeeks} week{streakWeeks === 1 ? "" : "s"} of saving goes back to zero.
+              </p>
+            )}
+            {nextMilestone && (
+              <p className="opacity-80">
+                The {formatCurrency(nextMilestone.bonus)} Dad Match bonus is {weeksToBonus} week
+                {weeksToBonus === 1 ? "" : "s"} away
+                {bonusDate ? ` (${formatShortDate(bonusDate)})` : ""} — after restarting it&apos;s {nextMilestone.weeks}{" "}
+                weeks away again.
+              </p>
+            )}
+          </div>
+        )}
+
         {taxPaid > 0 && (
           <p className="text-sm opacity-70">🧾 You&apos;ve paid {formatCurrency(taxPaid)} in Family Tax so far.</p>
         )}
+
+        <PlanInstead
+          kid={kid}
+          state={state}
+          amount={amount}
+          suggestedGoalName={suggestedGoalName}
+          onPlanInstead={onPlanInstead}
+          young={young}
+        />
 
         <div className="flex gap-2 pt-2">
           <button
@@ -158,6 +204,103 @@ export function WithdrawalConfirmDialog({
       </div>
     </div>
   );
+}
+
+/**
+ * The other door, offered on every spending request: don't take the money out — name the thing,
+ * set aside a few dollars a payday, and watch a date arrive. It turns "I want it now" into a plan
+ * with a finish line, keeps the streak alive, and leaves the balance (and its growth) untouched.
+ */
+function PlanInstead({
+  state,
+  kid,
+  amount,
+  suggestedGoalName,
+  onPlanInstead,
+  young,
+}: {
+  state: FamilyBankState;
+  kid: KidProfile;
+  amount: number;
+  suggestedGoalName?: string;
+  onPlanInstead: (name: string, weeklyContribution: number) => void;
+  young: boolean;
+}) {
+  const netWeekly = round2(kid.weeklyAllowance * (1 - state.parentSettings.taxRate));
+  // Default to about a third of what actually lands each payday — enough to feel like progress
+  // without swallowing the whole allowance. Never more than the goal itself needs.
+  const suggested = Math.max(0.5, Math.min(round2(netWeekly / 3) || 1, amount));
+  const [name, setName] = useState(suggestedGoalName?.trim() || "");
+  const [weekly, setWeekly] = useState(suggested);
+
+  const contribution = Math.min(Math.max(weekly, 0), amount);
+  const schedule = estimateGoalSchedule(kid, amount, contribution);
+  const options = [round2(netWeekly / 3), round2(netWeekly / 2), netWeekly]
+    .map((value) => Math.max(0.5, Math.min(round2(value) || 1, amount)))
+    .filter((value, index, all) => all.indexOf(value) === index);
+
+  return (
+    <div className={`space-y-2 rounded-lg border border-green-600/40 bg-green-600/5 p-3 ${young ? "text-base" : "text-sm"}`}>
+      <p className="font-medium">🎯 Or make it a plan instead</p>
+      <p className="opacity-80">
+        Save toward it instead of taking money out — your balance keeps growing and your streak keeps going.
+      </p>
+
+      <input
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        placeholder="What are you saving for?"
+        className={`w-full rounded-md border border-black/20 px-2 py-1.5 dark:border-white/20 dark:bg-transparent ${
+          young ? "rounded-xl py-2.5 text-base" : "text-sm"
+        }`}
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="opacity-70">Save</span>
+        {options.map((value) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setWeekly(value)}
+            className={`rounded-full px-2.5 py-1 text-xs ${
+              contribution === value
+                ? "bg-black text-white dark:bg-white dark:text-black"
+                : "border border-black/20 dark:border-white/20"
+            }`}
+          >
+            {formatCurrency(value)}/wk
+          </button>
+        ))}
+      </div>
+
+      <p className="opacity-80">
+        {schedule
+          ? `You'd have ${formatCurrency(amount)} by ${formatShortDate(schedule.completionDate)} — ${schedule.weeksToGo} payday${
+              schedule.weeksToGo === 1 ? "" : "s"
+            } from now.`
+          : "Pick an amount to save each payday to see when you'd have it."}
+      </p>
+
+      <button
+        type="button"
+        disabled={!name.trim() || !schedule}
+        onClick={() => onPlanInstead(name.trim(), contribution)}
+        className={`w-full rounded-md bg-green-600 px-3 py-2 font-medium text-white disabled:opacity-40 ${
+          young ? "rounded-2xl py-3 text-base" : "text-sm"
+        }`}
+      >
+        Save toward this instead
+      </button>
+    </div>
+  );
+}
+
+function formatShortDate(date: Date): string {
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function formatCurrency(amount: number): string {
