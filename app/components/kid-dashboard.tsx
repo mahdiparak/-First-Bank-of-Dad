@@ -79,11 +79,15 @@ export function KidDashboard({
     );
   }
 
+  // Every parent already has full access to a kid's Goals/Invest/Ledger (and can do things a kid
+  // can't, like delete a goal) — Quests was the one tab missing from that, forcing a parent into
+  // Kid View just to see the quest board. No permissions model here, just personalization (see
+  // profile-panel.tsx's own docs), so this stays visible for both roles like every other tab.
   const tabs: { id: KidTab; label: string }[] = [
     { id: "home", label: "🏠 Home" },
     { id: "goals", label: "🎯 Goals" },
     { id: "invest", label: "📈 Invest" },
-    ...(role === "kid" ? [{ id: "quests" as KidTab, label: "🗺️ Quests" }] : []),
+    { id: "quests", label: "🗺️ Quests" },
     { id: "ledger", label: "📒 Ledger" },
   ];
 
@@ -114,9 +118,7 @@ export function KidDashboard({
       {tab === "invest" && (
         <InvestmentSandbox state={state} kid={kid} marketData={marketData} actor={actor} onMutate={tryMutate} />
       )}
-      {tab === "quests" && role === "kid" && (
-        <QuestBoard bounties={state.bounties} kid={kid} actor={actor} onMutate={tryMutate} />
-      )}
+      {tab === "quests" && <QuestBoard bounties={state.bounties} kid={kid} actor={actor} onMutate={tryMutate} />}
       {tab === "ledger" && <Ledger state={state} kid={kid} role={role} onMutate={tryMutate} />}
     </div>
   );
@@ -148,7 +150,7 @@ function HomeTab({
 
   return (
     <div className="space-y-6">
-      {role === "kid" && <EnvelopeInbox state={state} kid={kid} actor={actor} onMutate={onMutate} />}
+      <EnvelopeInbox state={state} kid={kid} actor={actor} onMutate={onMutate} />
 
       {/* Total balance leads the screen — the number a kid cares about most, before the story of
           how it got there. */}
@@ -315,7 +317,7 @@ function YoungKidHome({
 
   return (
     <div className="space-y-6">
-      {role === "kid" && <EnvelopeInbox state={state} kid={kid} actor={actor} onMutate={onMutate} young />}
+      <EnvelopeInbox state={state} kid={kid} actor={actor} onMutate={onMutate} young />
 
       <section
         className="rounded-3xl border-4 p-6 text-center"
@@ -341,7 +343,7 @@ function YoungKidHome({
 
       <GoalGetter state={state} kid={kid} role={role} actor={actor} onMutate={onMutate} young />
 
-      {openBounties.length > 0 && role === "kid" && (
+      {openBounties.length > 0 && (
         <section className="space-y-3 rounded-3xl border-2 border-dashed border-amber-500/40 bg-amber-500/5 p-5">
           <p className="text-lg font-semibold">🗺️ Quest Board — earn extra money!</p>
           {openBounties.map((bounty) => (
