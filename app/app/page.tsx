@@ -879,6 +879,13 @@ export default function Home() {
         deviceKidId={deviceKidId}
         deviceParentId={deviceParentId}
         onUnlock={() => setUnlocked(true)}
+        // A parent proving who they are on a kid's lock screen takes the device back with them:
+        // the role flips to parent (and stays that way next launch), so they aren't dropped into
+        // the kid's view they were stuck at.
+        onParentUnlock={(parentId) => {
+          handleChooseParentRole(parentId);
+          setUnlocked(true);
+        }}
       />
     );
   }

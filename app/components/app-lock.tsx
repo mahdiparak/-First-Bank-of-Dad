@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { deriveRoomId, deriveRoomIdFromPhraseAndName } from "@/lib/crypto";
 import { kidPinLockoutStatus, verifyKidPin } from "@/lib/kid-auth";
-import { parentPinLockoutStatus, verifyParentPin } from "@/lib/parent-auth";
+import { hasParentPinGate, parentPinLockoutStatus, verifyParentPin } from "@/lib/parent-auth";
 import { kidAvatar, parentAvatar, type FamilyBankState } from "@/lib/schema";
 import { loadRoomId, loadRoomName, type DeviceRole } from "@/lib/storage";
 import { formatLockoutRemaining, useLockoutCountdown } from "@/lib/use-lockout-countdown";
 import { RevealInput } from "./reveal-input";
+import { ParentLoginPrompt } from "./role-gate";
 
 /**
  * The lock screen: every time the app opens — and again every time it's been closed, backgrounded
@@ -25,17 +26,21 @@ export function AppLock({
   deviceKidId,
   deviceParentId,
   onUnlock,
+  onParentUnlock,
 }: {
   state: FamilyBankState;
   deviceRole: DeviceRole;
   deviceKidId: string | null;
   deviceParentId: string | null;
   onUnlock: () => void;
+  /** A parent taking their device back from a kid identity — unlocks AND hands the device back. */
+  onParentUnlock: (parentId?: string) => void;
 }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [recovering, setRecovering] = useState(false);
+  const [claimingAsParent, setClaimingAsParent] = useState(false);
   const [phrase, setPhrase] = useState("");
   const [recoverError, setRecoverError] = useState<string | null>(null);
   const [lockoutRemaining, setLockoutRemaining] = useState(0);
@@ -100,6 +105,30 @@ export function AppLock({
       setRecoverError("That Family Phrase doesn't match this device.");
       setPhrase("");
     }
+  }
+
+  /**
+   * The way out of a dead end: a parent who opened one of their kids' views and then closed the
+   * app comes back to THAT KID's PIN screen, on the parent's own device. Without this they'd need
+   * a PIN only the kid knows. Their own Parent PIN unlocks it and hands the device back to them.
+   * Only offered when the family actually has a Parent PIN — otherwise this would be a way past a
+   * kid's PIN that costs no secret at all.
+   */
+  const canClaimAsParent = kid !== null && hasParentPinGate(state);
+
+  if (claimingAsParent) {
+    return (
+      <main className="flex flex-1 items-center justify-center p-6">
+        <div className="w-full max-w-sm space-y-3 text-center">
+          <div className="text-4xl">👋</div>
+          <h1 className="text-lg font-semibold">Take this device back</h1>
+          <p className="text-sm opacity-70">
+            Enter your Parent PIN to unlock it and return to your own dashboard.
+          </p>
+          <ParentLoginPrompt state={state} onSuccess={onParentUnlock} onCancel={() => setClaimingAsParent(false)} />
+        </div>
+      </main>
+    );
   }
 
   if (recovering) {
@@ -170,6 +199,15 @@ export function AppLock({
         >
           Unlock
         </button>
+        {canClaimAsParent && (
+          <button
+            type="button"
+            onClick={() => setClaimingAsParent(true)}
+            className="block w-full rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20"
+          >
+            I&apos;m a parent — use my PIN
+          </button>
+        )}
         <button type="button" onClick={() => setRecovering(true)} className="text-sm opacity-60 underline">
           Forgot PIN?
         </button>
