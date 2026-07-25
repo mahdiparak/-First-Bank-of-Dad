@@ -30,7 +30,6 @@ import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
 import { addKid } from "@/lib/mutations";
 import { findKidByName, mergeJoinedKid, mergeJoinedParent } from "@/lib/onboarding";
-import { isUnlockRemembered, rememberUnlock } from "@/lib/unlock-memory";
 import { createEmptyState, kidAvatar, kidColor, normalizeState, type AuditActor, type FamilyBankState } from "@/lib/schema";
 import {
   exportStateToFile,
@@ -42,6 +41,7 @@ import {
   loadDeviceRole,
   loadOnboardingComplete,
   loadPendingJoin,
+  hasLegacyPlaintextState,
   loadRoomId,
   loadState,
   clearFamilyKeyMaterial,
@@ -62,7 +62,7 @@ import { SyncClient, type JoinRequest, type SyncMutation, type SyncStatus } from
 
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "";
 
-type Phase = "loading" | "onboarding" | "waiting-approval" | "ready";
+type Phase = "loading" | "onboarding" | "waiting-approval" | "legacy-state" | "ready";
 type ParentTab = "kids" | "approvals" | "money" | "talk" | "audit" | "settings";
 type SettingsSection = "profile" | "family" | "app";
 
@@ -231,6 +231,13 @@ export default function Home() {
       roomIdRef.current = roomId;
       cryptoKeyRef.current = key;
       const storedState = await loadState(key);
+      // Nothing loadable, but there IS an old pre-encryption plaintext record sitting there: say so
+      // rather than dropping into the wizard as if this device had never been set up. The record is
+      // left on disk untouched — it just isn't trusted as state any more.
+      if (!storedState && (await hasLegacyPlaintextState())) {
+        setPhase("legacy-state");
+        return;
+      }
       // Seed the celebration diff with the raw stored state, so anything the
       // engines pay out on this load (payday, interest, Dad Match) celebrates.
       prevStateRef.current = storedState;
@@ -256,16 +263,13 @@ export default function Home() {
       } else {
         setDeviceRole(role);
       }
-      // Start locked whenever the resolved identity has a PIN. The pendingKidId path has its own
-      // KidPinPrompt (from Cloudflare Access auto-match), so it isn't double-locked here. A prior
-      // unlock still remembered for this identity (see lib/unlock-memory.ts) skips the PIN screen
-      // again — refreshing, backgrounding/resuming the PWA, or reopening it within the remember
-      // window shouldn't re-ask; it expires and asks again after that window passes.
+      // Start locked whenever the resolved identity has a PIN — every single load, with nothing
+      // remembered from the last one. The pendingKidId path has its own KidPinPrompt (from
+      // Cloudflare Access auto-match), so it isn't double-locked here.
       const lockNeeded =
         Boolean(primed) &&
         effectiveRole !== null &&
-        needsAppLock(primed as FamilyBankState, effectiveRole, effectiveKidId, effectiveParentId) &&
-        !isUnlockRemembered(effectiveRole, effectiveKidId, effectiveParentId);
+        needsAppLock(primed as FamilyBankState, effectiveRole, effectiveKidId, effectiveParentId);
       setUnlocked(!lockNeeded);
       setPhase("ready");
       startSync(key, roomId);
@@ -284,6 +288,31 @@ export default function Home() {
       setMarketDataLoaded(true);
     });
   }, []);
+
+  /**
+   * Re-lock the instant the app goes away — switching to another app, backgrounding the PWA,
+   * locking the phone, closing the tab. Combined with starting locked on every load, that makes
+   * the PIN a real door on both sides: nothing is ever left open behind you, and coming back
+   * always costs a PIN. Nothing is persisted to make this work, so there's no remembered-unlock
+   * window for someone holding the device to ride out.
+   */
+  useEffect(() => {
+    if (!state || !deviceRole) return;
+    if (!needsAppLock(state, deviceRole, deviceKidId, deviceParentId)) return;
+
+    const relock = () => setUnlocked(false);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") relock();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    // pagehide covers the cases visibilitychange misses on iOS (a real close, or a swipe away
+    // that never reports "hidden" first).
+    window.addEventListener("pagehide", relock);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", relock);
+    };
+  }, [state, deviceRole, deviceKidId, deviceParentId]);
 
   useEffect(() => {
     if (!state || !marketDataLoaded) return;
@@ -458,9 +487,8 @@ export default function Home() {
     await savePendingJoin(null);
     await saveOnboardingComplete(true);
 
-    // They set their PIN during the join wizard — open straight in. Remembered for this tab session
-    // so a refresh moments later doesn't immediately re-ask; a real close-and-reopen still will.
-    rememberUnlock(mutation.role, mutation.kidId ?? null, mutation.parentId ?? null);
+    // They set their PIN seconds ago in the join wizard — this run opens straight in. Nothing is
+    // remembered beyond it: the next load asks for the PIN like every other load.
     setUnlocked(true);
     setJoinError(null);
     setPhase("ready");
@@ -526,9 +554,8 @@ export default function Home() {
     prevStateRef.current = result.state;
     setState(result.state);
     await saveState(key, result.state);
-    // They just set their PIN in the wizard — don't make them re-enter it right away, and remember
-    // it for this tab session so a refresh doesn't either. A real close-and-reopen still will.
-    rememberUnlock("parent", null, result.parentId);
+    // They just set their PIN in the wizard — don't make them re-enter it seconds later. This run
+    // only; the next load asks for it.
     setUnlocked(true);
     setPhase("ready");
     startSync(key, roomId);
@@ -556,10 +583,8 @@ export default function Home() {
     if (resolved.parentId) setDeviceParentId(resolved.parentId);
     if (resolved.kidId) setDeviceKidId(resolved.kidId);
     if (resolved.pendingKidId) setPendingKidId(resolved.pendingKidId);
-    // They just actively restored their own backup — open directly, and remember it for this tab
-    // session so a refresh doesn't immediately re-ask. Only meaningful once an identity is actually
-    // resolved (a restore with no role match instead lands on RoleChooser, which handles its own gates).
-    if (resolved.role) rememberUnlock(resolved.role, resolved.kidId ?? null, resolved.parentId ?? null);
+    // They just actively restored their own backup — open directly for this run. The next load
+    // asks for the PIN like any other.
     setUnlocked(true);
     setPhase("ready");
     startSync(key, roomId);
@@ -841,6 +866,10 @@ export default function Home() {
     return <WaitingApproval error={joinError} onCancel={() => void handleCancelJoin()} />;
   }
 
+  if (phase === "legacy-state") {
+    return <LegacyStateNotice onContinue={() => setPhase("onboarding")} />;
+  }
+
   // Cold-open lock: block the whole app until this device's owner enters their PIN.
   if (!unlocked && state && deviceRole) {
     return (
@@ -849,10 +878,7 @@ export default function Home() {
         deviceRole={deviceRole}
         deviceKidId={deviceKidId}
         deviceParentId={deviceParentId}
-        onUnlock={() => {
-          rememberUnlock(deviceRole, deviceKidId, deviceParentId);
-          setUnlocked(true);
-        }}
+        onUnlock={() => setUnlocked(true)}
       />
     );
   }
@@ -1201,6 +1227,34 @@ function CenteredMessage({ text }: { text: string }) {
 }
 
 /** Shown on a joining device between "Request to join" and a parent's decision. */
+/**
+ * Shown when this device's only stored data is a pre-encryption plaintext record, which the app no
+ * longer accepts as state (see lib/storage.ts). Nothing is deleted — the record stays exactly where
+ * it is — so the honest thing is to explain what happened and point at the two ways back in, rather
+ * than silently opening the wizard as though this device had never been set up.
+ */
+function LegacyStateNotice({ onContinue }: { onContinue: () => void }) {
+  return (
+    <main className="flex flex-1 items-center justify-center p-6">
+      <div className="w-full max-w-sm space-y-4 rounded-xl border border-black/10 p-6 text-center dark:border-white/10">
+        <div className="text-4xl">🔐</div>
+        <h1 className="text-lg font-semibold">This device needs setting up again</h1>
+        <p className="text-sm opacity-70">
+          Its saved data is from a much older version, before this app encrypted anything on your device. That format
+          isn&apos;t trusted any more, so it won&apos;t be opened.
+        </p>
+        <p className="text-sm opacity-70">
+          Nothing was deleted. Set this device up again with your Family Phrase to sync from another device in your
+          family, or restore from a backup file.
+        </p>
+        <button onClick={onContinue} className="w-full rounded-md bg-black px-3 py-2 text-white dark:bg-white dark:text-black">
+          Set up this device
+        </button>
+      </div>
+    </main>
+  );
+}
+
 function WaitingApproval({ error, onCancel }: { error: string | null; onCancel: () => void }) {
   // A wrong Family Phrase or room name can't be detected directly — a typo just connects you to a
   // different, empty room where no parent will ever answer. So after a while, nudge the user to

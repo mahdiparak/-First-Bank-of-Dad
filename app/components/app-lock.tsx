@@ -10,9 +10,10 @@ import { formatLockoutRemaining, useLockoutCountdown } from "@/lib/use-lockout-c
 import { RevealInput } from "./reveal-input";
 
 /**
- * The cold-open lock screen: every time the app loads, whoever this device belongs to re-enters
- * their 4-digit PIN before any data is shown. Skipped only when the active identity has no PIN
- * (e.g. a young kid on a shared device a parent set up) — see AppLockGate.needsAppLock.
+ * The lock screen: every time the app opens — and again every time it's been closed, backgrounded
+ * or switched away from — whoever this device belongs to re-enters their 4-digit PIN before any
+ * data is shown. Nothing is remembered between openings. Skipped only when the active identity has
+ * no PIN (e.g. a young kid on a shared device a parent set up) — see needsAppLock.
  *
  * Like every PIN in this app, this is a UI lock, not a cryptographic boundary: the local data and
  * the PIN hash both live in this browser, so someone with device/devtools access could bypass it.

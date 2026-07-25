@@ -47,19 +47,29 @@ export type DeviceRole = "parent" | "kid";
  * already has the Family-Phrase-derived CryptoKey in hand by the time state exists.
  */
 export async function loadState(key: CryptoKey): Promise<FamilyBankState | null> {
-  const stored = await stateStore.getItem<string | FamilyBankState>(STATE_KEY);
-  if (!stored) return null;
-  if (typeof stored === "string") {
-    try {
-      return normalizeState(await decryptPayload<FamilyBankState>(key, stored));
-    } catch {
-      return null; // Wrong key for this ciphertext (e.g. a stale key from before a phrase change).
-    }
+  const stored = await stateStore.getItem<unknown>(STATE_KEY);
+  // Ciphertext is the ONLY thing that counts as this family's state. Pre-encryption installs kept
+  // a plain object here and a migration used to adopt it, but that migration was also a way in:
+  // anything able to write this origin's IndexedDB could drop in a plaintext object and have the
+  // app treat it as the family's real data. Every install has long since re-saved as ciphertext,
+  // so the door is closed — a leftover plaintext row is now reported (hasLegacyPlaintextState) and
+  // left untouched on disk rather than trusted.
+  if (typeof stored !== "string") return null;
+  try {
+    return normalizeState(await decryptPayload<FamilyBankState>(key, stored));
+  } catch {
+    return null; // Wrong key for this ciphertext (e.g. a stale key from before a phrase change).
   }
-  // Pre-encryption installs stored a plain object here. Adopt it as-is; the very next saveState
-  // call (which normally follows within moments, e.g. via primeState's engines) overwrites it with
-  // ciphertext, so the migration is self-healing with no separate step or flag to track.
-  return normalizeState(stored);
+}
+
+/**
+ * Whether the state store holds a pre-encryption plaintext object — i.e. this device hasn't been
+ * opened since before at-rest encryption shipped, so `loadState` refuses it. Nothing is deleted:
+ * the caller explains the situation and points at Restore-from-backup or rejoining the family.
+ */
+export async function hasLegacyPlaintextState(): Promise<boolean> {
+  const stored = await stateStore.getItem<unknown>(STATE_KEY);
+  return stored !== null && typeof stored === "object";
 }
 
 export async function saveState(key: CryptoKey, state: FamilyBankState): Promise<void> {
