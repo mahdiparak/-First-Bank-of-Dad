@@ -25,6 +25,7 @@ import {
 import { AutoInvest } from "./auto-invest";
 import { SimulationChart, Sparkline } from "./charts";
 import { InvestConfirmDialog } from "./invest-confirm";
+import { InvestPermissions } from "./invest-permissions";
 import { assetColor, InvestmentPlot } from "./investment-plot";
 
 const ASSET_CLASS_ORDER: AssetClass[] = ["savings", "cd", "stocks", "crypto"];
@@ -52,12 +53,14 @@ const LOCK_OPTIONS = [4, 12, 26, 52];
 export function InvestmentSandbox({
   state,
   kid,
+  role,
   marketData,
   actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
+  role: "parent" | "kid";
   marketData: MarketDataResponse | null;
   actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
@@ -79,6 +82,14 @@ export function InvestmentSandbox({
   return (
     <div className="space-y-6">
       {error && <p className="text-sm text-red-500">{error}</p>}
+
+      {/* A parent looking at their kid's Invest screen can switch each kind on or off right here,
+          next to the cards it governs. The same control lives in Settings → Profile. */}
+      {role === "parent" && (
+        <section className="rounded-xl border border-black/10 p-4 dark:border-white/10">
+          <InvestPermissions kid={kid} actor={actor} onMutate={tryMutate} />
+        </section>
+      )}
 
       {mine.length > 0 && (
         <MyInvestments

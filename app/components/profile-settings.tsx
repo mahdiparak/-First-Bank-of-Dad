@@ -14,6 +14,7 @@ import {
   updateParentProfile,
 } from "@/lib/mutations";
 import { AddKidForm, type AddKidFormValues } from "./add-kid-form";
+import { InvestPermissions } from "./invest-permissions";
 import {
   KID_AVATARS,
   kidAvatar,
@@ -435,6 +436,9 @@ function KidProfileEditor({
           )}
         </form>
         {pinMessage && <p className="text-xs opacity-60">{pinMessage}</p>}
+        <div className="border-t border-black/10 pt-2 dark:border-white/10">
+          <InvestPermissions kid={kid} actor={actor} onMutate={onMutate} compact />
+        </div>
       </div>
     );
   }

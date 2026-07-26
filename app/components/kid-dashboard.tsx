@@ -118,7 +118,7 @@ export function KidDashboard({
       )}
       {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} actor={actor} onMutate={tryMutate} />}
       {tab === "invest" && (
-        <InvestmentSandbox state={state} kid={kid} marketData={marketData} actor={actor} onMutate={tryMutate} />
+        <InvestmentSandbox state={state} kid={kid} role={role} marketData={marketData} actor={actor} onMutate={tryMutate} />
       )}
       {tab === "quests" && <QuestBoard bounties={state.bounties} kid={kid} actor={actor} onMutate={tryMutate} />}
       {tab === "ledger" && <Ledger state={state} kid={kid} role={role} actor={actor} onMutate={tryMutate} />}
