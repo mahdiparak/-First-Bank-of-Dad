@@ -288,25 +288,28 @@ export function assetClassMeta(assetClass: AssetClass): AssetClassMeta {
 
 export const ALL_ASSET_CLASSES: AssetClass[] = ["savings", "cd", "stocks", "crypto"];
 
+/** The two that can't lose money — where a little kid starts, and the easiest yes for a parent. */
+export const NO_LOSS_ASSET_CLASSES: AssetClass[] = ["savings", "cd"];
+
 /**
- * What a parent is even allowed to switch on for this kid. A little kid gets the two that can't
- * lose money — a savings account and a CD — because "your money went down and there's nothing you
- * can do" is not a lesson a six-year-old can hold. The rollercoaster and the rocket wait for the
- * older-kid view, which is a setting a parent can change the day they think it's time.
+ * Whether this kind of investing reaches past what the little-kid screens are pitched at. "Your
+ * money went down and there's nothing you can do" is a hard lesson for a six-year-old, so the
+ * rollercoaster and the rocket carry a warning on a little kid's card — but a parent who thinks
+ * their kid is ready can still switch them on. The app advises here; it doesn't decide.
  */
-export function investableAssetClassesFor(kid: KidProfile): AssetClass[] {
-  return isYoungKidView(kid) ? ["savings", "cd"] : ALL_ASSET_CLASSES;
+export function isAdvancedForAge(kid: KidProfile, assetClass: AssetClass): boolean {
+  return isYoungKidView(kid) && !NO_LOSS_ASSET_CLASSES.includes(assetClass);
 }
 
 /**
  * What this kid can actually put money into right now. An older kid starts with everything (the
  * behaviour every existing family already has); a little kid starts with nothing until a parent
- * turns something on for them. Either way a parent can narrow it.
+ * turns something on for them. From there any of the four can be switched on or off for any kid,
+ * at any age — the parent's call, not the app's.
  */
 export function unlockedAssetClassesFor(kid: KidProfile): AssetClass[] {
-  const investable = investableAssetClassesFor(kid);
-  if (!kid.unlockedAssetClasses) return isYoungKidView(kid) ? [] : investable;
-  return investable.filter((assetClass) => kid.unlockedAssetClasses?.includes(assetClass));
+  if (!kid.unlockedAssetClasses) return isYoungKidView(kid) ? [] : [...ALL_ASSET_CLASSES];
+  return ALL_ASSET_CLASSES.filter((assetClass) => kid.unlockedAssetClasses?.includes(assetClass));
 }
 
 export function isAssetClassUnlocked(kid: KidProfile, assetClass: AssetClass): boolean {

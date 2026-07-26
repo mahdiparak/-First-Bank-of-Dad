@@ -14,7 +14,7 @@ import {
 import {
   ALL_ASSET_CLASSES,
   ASSET_CLASSES,
-  investableAssetClassesFor,
+  isAdvancedForAge,
   isAssetClassUnlocked,
   type AssetClass,
   type AuditActor,
@@ -29,7 +29,8 @@ const YOUNG_CD_LOCK_WEEKS = 4;
 /**
  * Investing for a little kid. Every kind is on the screen — seeing the rocket you can't press yet
  * is the point, it's what makes "when I'm older" mean something — but only what a parent has
- * switched on can be tapped, and only the two that can't lose money are switchable at this age.
+ * switched on can be tapped. A parent can switch on any of them, including the two that can lose
+ * money; those say so on the card rather than being sealed off.
  *
  * A parent looking at this same screen gets the switches inline, so unlocking happens right where
  * the question comes up rather than three menus away.
@@ -49,7 +50,6 @@ export function YoungInvest({
   actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
-  const investable = investableAssetClassesFor(kid);
   const positions = state.investments.filter((position) => position.kidId === kid.id && !position.closedAt);
   const anythingUnlocked = ALL_ASSET_CLASSES.some((assetClass) => isAssetClassUnlocked(kid, assetClass));
 
@@ -70,7 +70,7 @@ export function YoungInvest({
           role={role}
           assetClass={assetClass}
           unlocked={isAssetClassUnlocked(kid, assetClass)}
-          allowedAtThisAge={investable.includes(assetClass)}
+          advanced={isAdvancedForAge(kid, assetClass)}
           positions={positions.filter((position) => position.assetClass === assetClass)}
           marketData={marketData}
           actor={actor}
@@ -87,7 +87,7 @@ function YoungAssetCard({
   role,
   assetClass,
   unlocked,
-  allowedAtThisAge,
+  advanced,
   positions,
   marketData,
   actor,
@@ -98,7 +98,8 @@ function YoungAssetCard({
   role: "parent" | "kid";
   assetClass: AssetClass;
   unlocked: boolean;
-  allowedAtThisAge: boolean;
+  /** Can lose money, and this kid is on the little-kid screens — worth saying out loud, both ways. */
+  advanced: boolean;
   positions: FamilyBankState["investments"];
   marketData: MarketDataResponse | null;
   actor: AuditActor;
@@ -146,10 +147,13 @@ function YoungAssetCard({
 
       {!unlocked && (
         <p className="text-sm opacity-80">
-          {allowedAtThisAge
-            ? "🔒 Ask Dad to turn this one on for you."
-            : "🔒 This one's for when you're older — Dad can switch you to the big-kid screens when you're ready."}
+          🔒 Ask Dad to turn this one on for you.
+          {advanced && " This one can go down as well as up."}
         </p>
+      )}
+
+      {unlocked && advanced && (
+        <p className="text-sm opacity-80">⚠️ This one can go down as well as up. That&apos;s okay — it happens!</p>
       )}
 
       {unlocked && positions.length > 0 && (
@@ -240,15 +244,13 @@ function YoungAssetCard({
       {role === "parent" && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-black/10 pt-2 text-xs dark:border-white/10">
           <span className="opacity-60">
-            {allowedAtThisAge
-              ? `Parent: ${unlocked ? "on" : "off"} for ${kid.name}`
-              : `Parent: not offered on the little-kid screens`}
+            {`Parent: ${unlocked ? "on" : "off"} for ${kid.name}`}
+            {advanced && " · can lose money"}
           </span>
           <button
             type="button"
-            disabled={!allowedAtThisAge}
             onClick={() => onMutate((s) => setAssetClassUnlocked(s, kid.id, assetClass, !unlocked, actor))}
-            className="rounded-md border border-black/20 px-2 py-1 disabled:opacity-40 dark:border-white/20"
+            className="rounded-md border border-black/20 px-2 py-1 dark:border-white/20"
           >
             {unlocked ? "Turn off" : "Turn on"}
           </button>

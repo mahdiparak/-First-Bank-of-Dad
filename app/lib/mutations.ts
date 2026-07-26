@@ -1,4 +1,4 @@
-import { ALL_ASSET_CLASSES, ASSET_CLASSES, investableAssetClassesFor, KID_COLORS, unlockedAssetClassesFor, type AssetClass, type AuditActor, type AuditUndo, type DadMatchMilestone, type FamilyBankState, type InvestmentPosition, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
+import { ALL_ASSET_CLASSES, ASSET_CLASSES, KID_COLORS, unlockedAssetClassesFor, type AssetClass, type AuditActor, type AuditUndo, type DadMatchMilestone, type FamilyBankState, type InvestmentPosition, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
 
 function touch(state: FamilyBankState): FamilyBankState {
   return { ...state, updatedAt: new Date().toISOString() };
@@ -545,9 +545,9 @@ export function setKidPin(
 }
 
 /**
- * Parent-only: switches one kind of investing on or off for one kid. Refuses anything outside what
- * that kid's view allows at all (see investableAssetClassesFor), so a stray call can't hand a
- * six-year-old the crypto button.
+ * Parent-only: switches one kind of investing on or off for one kid. Any of the four can be turned
+ * on for any kid — a little kid's screens warn that the rollercoaster and the rocket can lose money
+ * (see isAdvancedForAge), but a parent who decides their kid is ready isn't blocked by the app.
  */
 export function setAssetClassUnlocked(
   state: FamilyBankState,
@@ -558,9 +558,6 @@ export function setAssetClassUnlocked(
 ): FamilyBankState {
   const kid = state.kids.find((candidate) => candidate.id === kidId);
   if (!kid) throw new Error("Kid not found.");
-  if (unlocked && !investableAssetClassesFor(kid).includes(assetClass)) {
-    throw new Error(`${ASSET_CLASSES[assetClass].shortLabel} isn't available for ${kid.name} yet.`);
-  }
 
   const current = new Set(unlockedAssetClassesFor(kid));
   if (unlocked) current.add(assetClass);
