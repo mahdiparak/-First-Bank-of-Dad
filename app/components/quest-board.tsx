@@ -2,6 +2,7 @@
 
 import { claimBounty } from "@/lib/mutations";
 import { questIcon, questTier, type AuditActor, type Bounty, type FamilyBankState, type KidProfile } from "@/lib/schema";
+import { PagerBar, usePager } from "./paging";
 
 /** A single job card — shared by the full Quest Board tab and the young-kid home screen. */
 export function QuestCard({
@@ -93,6 +94,7 @@ export function QuestBoard({
   const mine = bounties
     .filter((bounty) => bounty.claimedByKidId === kid.id && bounty.status !== "open")
     .sort((a, b) => (b.claimedAt ?? "").localeCompare(a.claimedAt ?? ""));
+  const minePager = usePager(mine, 10);
 
   return (
     <section className="space-y-4 rounded-2xl border-2 border-dashed border-amber-500/40 bg-amber-500/5 p-4">
@@ -116,9 +118,10 @@ export function QuestBoard({
       {mine.length > 0 && (
         <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
           <p className="text-xs font-semibold opacity-70">My quests</p>
-          {mine.map((bounty) => (
+          {minePager.page.map((bounty) => (
             <QuestCard key={bounty.id} bounty={bounty} />
           ))}
+          <PagerBar pager={minePager} noun="quests" />
         </div>
       )}
     </section>

@@ -32,7 +32,8 @@ import {
   type SavingsGoal,
 } from "@/lib/schema";
 import { BadgeWall } from "./badge-wall";
-import { MonthCalendar, MONTH_LABELS, type CalendarMarker } from "./calendar";
+import { MonthCalendar, type CalendarMarker } from "./calendar";
+import { MonthFilterBar, PagerBar, useMonthFilter, usePager } from "./paging";
 import { EnvelopeInbox } from "./envelope-inbox";
 import { MoneyBuckets } from "./money-buckets";
 import { MoneyTimeline } from "./money-timeline";
@@ -809,8 +810,6 @@ function Ledger({
   const [memo, setMemo] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [planned, setPlanned] = useState<string | null>(null);
-  const now = new Date();
-  const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
 
   const available = availableBalanceForKid(state, kid.id);
   const transactions = state.transactions.filter((transaction) => transaction.kidId === kid.id);
@@ -850,21 +849,8 @@ function Ledger({
       .map((item): Row => ({ kind: "request", at: item.requestedAt, item })),
   ].sort((a, b) => (a.at < b.at ? 1 : -1));
 
-  const year = cursor.getFullYear();
-  const month = cursor.getMonth();
-  const rangeStart = new Date(year, month, 1).getTime();
-  const rangeEnd = new Date(year, month + 1, 1).getTime();
-  const rows = allRows.filter((row) => {
-    const at = new Date(row.at).getTime();
-    return at >= rangeStart && at < rangeEnd;
-  });
-
-  const earliestYear = Math.min(
-    new Date(kid.createdAt).getFullYear(),
-    ...allRows.map((row) => new Date(row.at).getFullYear()),
-    now.getFullYear(),
-  );
-  const yearOptions = Array.from({ length: now.getFullYear() - earliestYear + 1 }, (_, i) => earliestYear + i);
+  const filter = useMonthFilter(allRows, (row) => row.at);
+  const pager = usePager(filter.filtered, 20);
 
   return (
     <section className="space-y-3 rounded-xl border border-black/10 p-4 dark:border-white/10">
@@ -913,56 +899,11 @@ function Ledger({
       )}
       <WithdrawalPreview state={state} kid={kid} amount={Number(amount) || 0} />
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-black/10 pt-3 dark:border-white/10">
-        <button
-          type="button"
-          onClick={() => setCursor(new Date(year, month - 1, 1))}
-          aria-label="Previous month"
-          className="rounded-md px-2 py-1 text-sm opacity-60 hover:opacity-100"
-        >
-          ←
-        </button>
-        <div className="flex items-center gap-2">
-          <select
-            value={month}
-            onChange={(event) => setCursor(new Date(year, Number(event.target.value), 1))}
-            className="rounded-md border border-black/20 px-2 py-1 text-sm dark:border-white/20 dark:bg-transparent"
-          >
-            {MONTH_LABELS.map((label, i) => (
-              <option key={label} value={i}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={year}
-            onChange={(event) => setCursor(new Date(Number(event.target.value), month, 1))}
-            className="rounded-md border border-black/20 px-2 py-1 text-sm dark:border-white/20 dark:bg-transparent"
-          >
-            {yearOptions.map((y) => (
-              <option key={y} value={y}>
-                {y}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button
-          type="button"
-          onClick={() => setCursor(new Date(year, month + 1, 1))}
-          aria-label="Next month"
-          className="rounded-md px-2 py-1 text-sm opacity-60 hover:opacity-100"
-        >
-          →
-        </button>
-      </div>
+      <MonthFilterBar filter={filter} className="border-t border-black/10 pt-3 dark:border-white/10" />
 
       <div className="divide-y divide-black/10 dark:divide-white/10">
-        {rows.length === 0 && (
-          <p className="py-2 text-sm opacity-70">
-            No transactions in {MONTH_LABELS[month]} {year}.
-          </p>
-        )}
-        {rows.map((row) =>
+        {pager.total === 0 && <p className="py-2 text-sm opacity-70">No transactions in {filter.label}.</p>}
+        {pager.page.map((row) =>
           row.kind === "transaction" ? (
             <div key={row.item.id} className="flex items-center justify-between py-2 text-sm">
               <div className="flex items-center gap-2">
@@ -999,6 +940,8 @@ function Ledger({
           ),
         )}
       </div>
+
+      <PagerBar pager={pager} noun="entries" />
 
       {confirming && (
         <WithdrawalConfirmDialog

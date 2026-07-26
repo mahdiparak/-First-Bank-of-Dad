@@ -23,6 +23,7 @@ import {
   type KidProfile,
 } from "@/lib/schema";
 import { AutoInvest } from "./auto-invest";
+import { PagerBar, usePager } from "./paging";
 import { SimulationChart, Sparkline } from "./charts";
 import { InvestConfirmDialog } from "./invest-confirm";
 import { InvestPermissions } from "./invest-permissions";
@@ -151,6 +152,13 @@ function MyInvestments({
     [shown, state.parentSettings, marketData],
   );
 
+  // Newest first, and paged: a kid who has been investing for a year has a lot of closed ones.
+  const newestFirst = useMemo(
+    () => shown.slice().sort((a, b) => (a.openedAt < b.openedAt ? 1 : -1)),
+    [shown],
+  );
+  const pager = usePager(newestFirst, 10);
+
   const value = open.reduce((sum, position) => sum + position.currentValue, 0);
   const invested = open.reduce((sum, position) => sum + position.principal, 0);
   const color = activeView === "all" ? kidColor(kid) : assetColor(activeView);
@@ -182,19 +190,17 @@ function MyInvestments({
       <InvestmentPlot value={history.value} invested={history.invested} color={color} label={label} />
 
       <div className="space-y-3 border-t border-black/10 pt-3 dark:border-white/10">
-        {shown
-          .slice()
-          .sort((a, b) => (a.openedAt < b.openedAt ? 1 : -1))
-          .map((position) => (
-            <PositionRow
-              key={position.id}
-              state={state}
-              position={position}
-              marketData={marketData}
-              actor={actor}
-              onMutate={onMutate}
-            />
-          ))}
+        {pager.page.map((position) => (
+          <PositionRow
+            key={position.id}
+            state={state}
+            position={position}
+            marketData={marketData}
+            actor={actor}
+            onMutate={onMutate}
+          />
+        ))}
+        <PagerBar pager={pager} noun="investments" />
       </div>
     </section>
   );

@@ -13,6 +13,7 @@ import {
   virtualBalanceForKid,
 } from "@/lib/mutations";
 import type { AuditActor, FamilyBankState } from "@/lib/schema";
+import { PagerBar, usePager } from "./paging";
 
 const inputClass =
   "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
@@ -42,6 +43,8 @@ export function ReconciliationPanel({
       setError(mutationError instanceof Error ? mutationError.message : "Something went wrong.");
     }
   }
+
+  const adjustmentPager = usePager(state.reconciliation.cashAdjustments, 10);
 
   const virtual = virtualAppBalance(state);
   const liability = parentCashLiability(state);
@@ -149,7 +152,7 @@ export function ReconciliationPanel({
 
       <div className="space-y-2 border-t border-black/10 pt-3 dark:border-white/10">
         <p className="text-sm opacity-70">General adjustments (not tied to a kid, e.g. bank-paid interest)</p>
-        {state.reconciliation.cashAdjustments.map((adjustment) => (
+        {adjustmentPager.page.map((adjustment) => (
           <div key={adjustment.id} className="flex items-center justify-between text-sm">
             <span>
               {formatCurrency(adjustment.amount)} {adjustment.note && `— ${adjustment.note}`}
@@ -162,6 +165,7 @@ export function ReconciliationPanel({
             </button>
           </div>
         ))}
+        <PagerBar pager={adjustmentPager} noun="adjustments" />
         <form onSubmit={handleAddAdjustment} className="flex flex-wrap gap-2">
           <input
             value={adjustmentAmount}
