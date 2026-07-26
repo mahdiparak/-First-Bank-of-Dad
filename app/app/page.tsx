@@ -1126,20 +1126,25 @@ export default function Home() {
         </section>
       ) : (
         <>
-          <nav className="flex flex-wrap gap-2">
+          {/* A fixed three-across grid rather than flex-wrap: six tabs of uneven width wrapped
+              3 / 2 / 1, stranding Settings alone on a line of its own. Three equal columns make it
+              two tidy rows at any screen width, with no tab ever orphaned. */}
+          <nav className="grid grid-cols-3 gap-2">
             {parentTabs.map((entry) => (
               <button
                 key={entry.id}
                 onClick={() => setParentTab(entry.id)}
-                className={`rounded-full px-3 py-1.5 text-sm ${
+                className={`flex items-center justify-center gap-1 rounded-full px-2 py-1.5 text-center text-xs leading-tight sm:text-sm ${
                   parentTab === entry.id
                     ? "bg-black text-white dark:bg-white dark:text-black"
                     : "border border-black/20 dark:border-white/20"
                 }`}
               >
-                {entry.label}
+                {/* Wraps rather than truncating: on a narrow phone "Money Talk" going to two short
+                    lines is fine, "Money T…" is not. */}
+                <span>{entry.label}</span>
                 {entry.id === "approvals" && pendingCount > 0 && (
-                  <span className="ml-1 rounded-full bg-red-500 px-1.5 text-xs text-white">{pendingCount}</span>
+                  <span className="shrink-0 rounded-full bg-red-500 px-1.5 text-xs text-white">{pendingCount}</span>
                 )}
               </button>
             ))}
