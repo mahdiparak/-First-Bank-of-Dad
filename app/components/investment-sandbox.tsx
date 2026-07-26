@@ -21,6 +21,7 @@ import {
   type InvestmentPosition,
   type KidProfile,
 } from "@/lib/schema";
+import { AutoInvest } from "./auto-invest";
 import { SimulationChart, Sparkline } from "./charts";
 import { InvestConfirmDialog } from "./invest-confirm";
 import { assetColor, InvestmentPlot } from "./investment-plot";
@@ -97,6 +98,9 @@ export function InvestmentSandbox({
         actor={actor}
         onMutate={tryMutate}
       />
+
+      {/* Last, on purpose: decide in the moment first, then decide once and stop deciding. */}
+      <AutoInvest state={state} kid={kid} onMutate={tryMutate} />
     </div>
   );
 }

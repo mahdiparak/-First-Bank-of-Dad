@@ -42,6 +42,7 @@ export function WithdrawalConfirmDialog({
   onPlanInstead: (name: string, weeklyContribution: number) => void;
   young?: boolean;
 }) {
+  const [askingAnyway, setAskingAnyway] = useState(false);
   const timeline = buildMoneyTimeline(state, kid, { simAmount: amount, simKind: "withdraw" });
   const taxPaid = totalTaxPaidForKid(state, kid.id);
   const balance = timeline.past[timeline.past.length - 1].value;
@@ -100,6 +101,50 @@ export function WithdrawalConfirmDialog({
 
   const recoveryAt = timeline.recoveryAt;
   const showRecoveryMarker = recoveryAt !== undefined && recoveryAt <= tMax;
+
+  // A little kid tapping "Ask Dad" meets the goal first, on its own screen, before the charts and
+  // the streak maths — for them the useful question isn't "how much growth does this cost", it's
+  // "do you want it now, or do you want to save up for it?" Asking anyway is one tap away.
+  if (young && !askingAnyway) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
+        <div className="w-full max-w-md space-y-4 overflow-y-auto rounded-3xl bg-white p-6 dark:bg-neutral-900" style={{ maxHeight: "90vh" }}>
+          <h3 className="text-xl font-semibold">🎯 Want to save up for it instead?</h3>
+          <p className="text-base opacity-80">
+            You can ask Dad for {formatCurrency(amount)} now — or make it your goal and watch it fill up all by
+            itself.
+          </p>
+
+          <PlanInstead
+            state={state}
+            kid={kid}
+            amount={amount}
+            suggestedGoalName={suggestedGoalName}
+            onPlanInstead={onPlanInstead}
+            young
+            bare
+          />
+
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="flex-1 rounded-2xl border border-black/20 px-3 py-3 text-base dark:border-white/20"
+            >
+              Never mind
+            </button>
+            <button
+              type="button"
+              onClick={() => setAskingAnyway(true)}
+              className="flex-1 rounded-2xl border border-black/20 px-3 py-3 text-base dark:border-white/20"
+            >
+              No, ask Dad 🙋
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
@@ -218,6 +263,7 @@ function PlanInstead({
   suggestedGoalName,
   onPlanInstead,
   young,
+  bare = false,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
@@ -225,6 +271,8 @@ function PlanInstead({
   suggestedGoalName?: string;
   onPlanInstead: (name: string, weeklyContribution: number) => void;
   young: boolean;
+  /** Drops the panel's own heading when the screen around it already made the offer. */
+  bare?: boolean;
 }) {
   const netWeekly = round2(kid.weeklyAllowance * (1 - state.parentSettings.taxRate));
   // Default to about a third of what actually lands each payday — enough to feel like progress
@@ -241,10 +289,14 @@ function PlanInstead({
 
   return (
     <div className={`space-y-2 rounded-lg border border-green-600/40 bg-green-600/5 p-3 ${young ? "text-base" : "text-sm"}`}>
-      <p className="font-medium">🎯 Or make it a plan instead</p>
-      <p className="opacity-80">
-        Save toward it instead of taking money out — your balance keeps growing and your streak keeps going.
-      </p>
+      {!bare && (
+        <>
+          <p className="font-medium">🎯 Or make it a plan instead</p>
+          <p className="opacity-80">
+            Save toward it instead of taking money out — your balance keeps growing and your streak keeps going.
+          </p>
+        </>
+      )}
 
       <input
         value={name}

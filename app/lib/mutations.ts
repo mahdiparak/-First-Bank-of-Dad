@@ -792,6 +792,124 @@ const CD_EMOJI_BY_ASSET: Record<AssetClass, string> = {
   crypto: "🚀",
 };
 
+/**
+ * The mechanics of opening a position, with no activity-log entry: debit the cash, create the
+ * position. Split out from allocateToInvestment so the payday engine can run a kid's standing
+ * auto-invest orders without writing an "Invested $2.50 in stocks" line into the family log every
+ * single week — the same reason auto-saving toward a goal doesn't log either.
+ */
+function openInvestmentPosition(
+  state: FamilyBankState,
+  kidId: string,
+  assetClass: AssetClass,
+  amount: number,
+  lockWeeks: number | undefined,
+  at: string,
+  memo: string,
+): { state: FamilyBankState; positionId: string; transactionId: string } {
+  const withDebit = recordTransaction(state, kidId, -amount, CD_EMOJI_BY_ASSET[assetClass], "investment", memo, at);
+  const transactionId = withDebit.transactions[withDebit.transactions.length - 1].id;
+
+  const maturesAt =
+    assetClass === "cd" && lockWeeks
+      ? new Date(new Date(at).getTime() + lockWeeks * 7 * DAY_MS).toISOString()
+      : undefined;
+
+  const positionId = crypto.randomUUID();
+  return {
+    positionId,
+    transactionId,
+    state: touch({
+      ...withDebit,
+      investments: [
+        ...withDebit.investments,
+        {
+          id: positionId,
+          kidId,
+          assetClass,
+          principal: amount,
+          currentValue: amount,
+          openedAt: at,
+          lastGrowthUpdateAt: at,
+          lockWeeks: assetClass === "cd" ? lockWeeks : undefined,
+          maturesAt,
+        },
+      ],
+    }),
+  };
+}
+
+/**
+ * Runs this kid's standing auto-invest orders for one payday, in the order they were set up, each
+ * capped by what's actually left — so a rule can never overdraw the balance or the rule before it.
+ * Dated at the payday itself, which matters when the app has been closed for weeks and is catching
+ * up: the positions start earning from the day the money would really have gone in.
+ */
+export function runAutoInvest(state: FamilyBankState, kidId: string, at: string): FamilyBankState {
+  const rules = state.autoInvestRules
+    .filter((rule) => rule.kidId === kidId && rule.weeklyAmount > 0)
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+
+  let working = state;
+  for (const rule of rules) {
+    const available = availableBalanceForKid(working, kidId);
+    const amount = round2(Math.min(rule.weeklyAmount, available));
+    if (amount <= 0) continue;
+    working = openInvestmentPosition(
+      working,
+      kidId,
+      rule.assetClass,
+      amount,
+      rule.lockWeeks,
+      at,
+      `Auto-invested in ${rule.assetClass}`,
+    ).state;
+  }
+  return working;
+}
+
+/** Kid-side: sets (or clears, with 0) the standing "every payday" order for one asset class. */
+export function setAutoInvestRule(
+  state: FamilyBankState,
+  kidId: string,
+  assetClass: AssetClass,
+  weeklyAmount: number,
+  lockWeeks: number | undefined,
+): FamilyBankState {
+  if (!Number.isFinite(weeklyAmount) || weeklyAmount < 0) throw new Error("That's not an amount.");
+  const others = state.autoInvestRules.filter(
+    (rule) => !(rule.kidId === kidId && rule.assetClass === assetClass),
+  );
+  if (round2(weeklyAmount) <= 0) return touch({ ...state, autoInvestRules: others });
+
+  const existing = state.autoInvestRules.find(
+    (rule) => rule.kidId === kidId && rule.assetClass === assetClass,
+  );
+  return touch({
+    ...state,
+    autoInvestRules: [
+      ...others,
+      {
+        id: existing?.id ?? crypto.randomUUID(),
+        kidId,
+        assetClass,
+        weeklyAmount: round2(weeklyAmount),
+        lockWeeks: assetClass === "cd" ? lockWeeks : undefined,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+      },
+    ],
+  });
+}
+
+/** What this kid has committed to investing out of every payday, across all their rules. */
+export function autoInvestWeeklyTotal(state: FamilyBankState, kidId: string): number {
+  return round2(
+    state.autoInvestRules
+      .filter((rule) => rule.kidId === kidId)
+      .reduce((total, rule) => total + rule.weeklyAmount, 0),
+  );
+}
+
 /** Moves real balance into a mock investment position — this is what the kid actually "owns" less. */
 export function allocateToInvestment(
   state: FamilyBankState,
@@ -811,40 +929,15 @@ export function allocateToInvestment(
     throw new Error("That's more than the available balance.");
   }
 
-  const now = new Date().toISOString();
-  const withDebit = recordTransaction(
+  const { state: invested, positionId, transactionId } = openInvestmentPosition(
     state,
     kidId,
-    -amount,
-    CD_EMOJI_BY_ASSET[assetClass],
-    "investment",
+    assetClass,
+    amount,
+    lockWeeks,
+    new Date().toISOString(),
     `Invested in ${assetClass}`,
   );
-  const transactionId = withDebit.transactions[withDebit.transactions.length - 1].id;
-
-  const maturesAt =
-    assetClass === "cd" && lockWeeks
-      ? new Date(Date.now() + lockWeeks * 7 * 24 * 60 * 60 * 1000).toISOString()
-      : undefined;
-
-  const positionId = crypto.randomUUID();
-  const invested = touch({
-    ...withDebit,
-    investments: [
-      ...withDebit.investments,
-      {
-        id: positionId,
-        kidId,
-        assetClass,
-        principal: amount,
-        currentValue: amount,
-        openedAt: now,
-        lastGrowthUpdateAt: now,
-        lockWeeks: assetClass === "cd" ? lockWeeks : undefined,
-        maturesAt,
-      },
-    ],
-  });
   return logAudit(invested, actor, `Invested ${formatCurrency(amount)} in ${assetClass} for ${kidName(state, kidId)}`, {
     kidId,
     undo: { kind: "remove-investment", positionId, transactionId },

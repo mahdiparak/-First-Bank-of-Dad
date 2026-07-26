@@ -203,6 +203,23 @@ export interface AssetClassMeta {
   ride: "flat" | "gentle" | "bumpy" | "wild";
 }
 
+/**
+ * A standing "every payday, put this much to work" instruction the kid sets for themselves — the
+ * investing counterpart to a goal's weekly auto-save. One rule per asset class per kid; setting an
+ * amount of 0 removes it. Deliberately not parent-gated: the money is already theirs and every
+ * individual investment it makes follows the same rules (minimum hold, CD lock) as a manual one.
+ */
+export interface AutoInvestRule {
+  id: string;
+  kidId: string;
+  assetClass: AssetClass;
+  /** Dollars moved into this asset class out of each payday. */
+  weeklyAmount: number;
+  /** CD only — how long each payday's slice gets locked up for. */
+  lockWeeks?: number;
+  createdAt: string;
+}
+
 export const ASSET_CLASSES: Record<AssetClass, AssetClassMeta> = {
   savings: {
     label: "Savings (The Bicycle)",
@@ -360,6 +377,7 @@ export interface FamilyBankState {
   streaks: StreakState[];
   taxPots: TaxPot[];
   investments: InvestmentPosition[];
+  autoInvestRules: AutoInvestRule[];
   withdrawalRequests: WithdrawalRequest[];
   parentSettings: ParentSettings;
   reconciliation: ReconciliationSnapshot;
@@ -377,6 +395,7 @@ export const CURRENT_STATE_VERSION = 1;
  * - `parentProfiles` defaults to an empty array if the state predates named parent profiles.
  * - `auditLog` defaults to an empty array if the state predates the activity log.
  * - `envelopes` defaults to an empty array if the state predates the quest-reward envelope flow.
+ * - `autoInvestRules` defaults to an empty array if the state predates standing invest orders.
  */
 export function normalizeState(state: FamilyBankState): FamilyBankState {
   const legacy = state as unknown as {
@@ -384,6 +403,7 @@ export function normalizeState(state: FamilyBankState): FamilyBankState {
     reconciliation?: { actualHysaBalances?: KidHysaBalance[]; cashAdjustments?: CashAdjustment[] };
     auditLog?: AuditEntry[];
     envelopes?: Envelope[];
+    autoInvestRules?: AutoInvestRule[];
     taxPots?: (TaxPot | Omit<TaxPot, "totalPaid">)[];
   };
 
@@ -391,9 +411,20 @@ export function normalizeState(state: FamilyBankState): FamilyBankState {
   const needsParentProfiles = !Array.isArray(legacy.parentProfiles);
   const needsAuditLog = !Array.isArray(legacy.auditLog);
   const needsEnvelopes = !Array.isArray(legacy.envelopes);
+  const needsAutoInvest = !Array.isArray(legacy.autoInvestRules);
   const needsTaxPotTotals = (legacy.taxPots ?? []).some((pot) => typeof (pot as TaxPot).totalPaid !== "number");
   const needsMinHold = typeof state.parentSettings.investmentMinHoldDays !== "number";
-  if (!needsReconciliationFix && !needsParentProfiles && !needsAuditLog && !needsEnvelopes && !needsTaxPotTotals && !needsMinHold) return state;
+  if (
+    !needsReconciliationFix &&
+    !needsParentProfiles &&
+    !needsAuditLog &&
+    !needsEnvelopes &&
+    !needsTaxPotTotals &&
+    !needsMinHold &&
+    !needsAutoInvest
+  ) {
+    return state;
+  }
 
   return {
     ...state,
@@ -406,6 +437,7 @@ export function normalizeState(state: FamilyBankState): FamilyBankState {
       : state.reconciliation,
     auditLog: needsAuditLog ? [] : state.auditLog,
     envelopes: needsEnvelopes ? [] : state.envelopes,
+    autoInvestRules: needsAutoInvest ? [] : state.autoInvestRules,
     // Pre-existing installs have no record of tax withheld before this field existed — the
     // current pot balance (what hasn't been refunded yet) is the best floor we can backfill.
     taxPots: needsTaxPotTotals
@@ -439,6 +471,7 @@ export function createEmptyState(familyId: string): FamilyBankState {
     streaks: [],
     taxPots: [],
     investments: [],
+    autoInvestRules: [],
     withdrawalRequests: [],
     parentSettings: {
       hysaApr: 0.036,

@@ -1,4 +1,4 @@
-import { allocateToGoal, availableBalanceForKid, recordTransaction } from "./mutations";
+import { allocateToGoal, availableBalanceForKid, recordTransaction, runAutoInvest } from "./mutations";
 import type { FamilyBankState, KidProfile } from "./schema";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -62,7 +62,10 @@ function processAllowanceForKid(state: FamilyBankState, kid: KidProfile, now: Da
         candidate.id === kid.id ? { ...candidate, lastAllowancePaidAt: paidAt } : candidate,
       ),
     };
+    // Goals first, then standing invest orders: a goal is a promise with a date on it, so it gets
+    // the payday's dollars before anything optional does.
     working = autoSaveTowardGoals(working, kid.id, paidAt);
+    working = runAutoInvest(working, kid.id, paidAt);
 
     due = new Date(due.getTime() + WEEK_MS);
     payments++;
