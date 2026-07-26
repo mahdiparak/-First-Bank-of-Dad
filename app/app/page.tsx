@@ -144,9 +144,11 @@ export default function Home() {
   const [pendingKidId, setPendingKidId] = useState<string | null>(null);
   const [deviceParentId, setDeviceParentId] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
-  // The in-app refresh: busy flag, and the time of the last successful one for a bit of reassurance.
+  // The in-app refresh: busy flag, the time of the last successful one, and what it found —
+  // a tap that silently does nothing is indistinguishable from a broken button.
   const [refreshing, setRefreshing] = useState(false);
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
+  const [refreshResult, setRefreshResult] = useState<RefreshResult | null>(null);
   // Sockets (including this device) currently in this room, per the relay's presence message. A
   // green "open" WebSocket only means THIS device's connection succeeded — it says nothing about
   // whether anyone else is actually in the same room (a phrase/room typo lands you alone in a
@@ -291,6 +293,13 @@ export default function Home() {
       setMarketDataLoaded(true);
     });
   }, []);
+
+  // The result banner is an acknowledgement, not a status bar — it says its piece and gets out.
+  useEffect(() => {
+    if (!refreshResult) return;
+    const timer = setTimeout(() => setRefreshResult(null), 5000);
+    return () => clearTimeout(timer);
+  }, [refreshResult]);
 
   /**
    * Re-lock the instant the app goes away — switching to another app, backgrounding the PWA,
@@ -740,22 +749,28 @@ export default function Home() {
   async function handleRefresh() {
     if (refreshing) return;
     setRefreshing(true);
-    setRefreshedAt(null);
+    setRefreshResult(null);
+    // The work itself usually finishes in a few dozen milliseconds, which is fast enough that a
+    // spinner flickers and the tap reads as "nothing happened". Holding the busy state for a beat
+    // is the difference between a button that feels broken and one that feels like it did a job.
+    const spun = new Promise((resolve) => setTimeout(resolve, 700));
+    const before = stateRef.current;
     try {
       const data = await loadMarketData({ force: true });
       setMarketData(data);
       setMarketDataLoaded(true);
 
-      const current = stateRef.current;
-      if (current) {
-        const caughtUp = runInvestmentEngine(runScheduledEngines(current), data);
-        if (caughtUp !== current) commitState(caughtUp);
+      let caughtUp = before;
+      if (before) {
+        caughtUp = runInvestmentEngine(runScheduledEngines(before), data);
+        if (caughtUp !== before) commitState(caughtUp);
       }
 
       // Ask the room for anything missed, and hand over what this device has. A socket that
       // dropped while the app stayed open won't reconnect on its own until its backoff timer
       // fires, so a manual refresh jumps that queue.
       const client = syncClientRef.current;
+      let askedPeers = false;
       if (client) {
         if (syncStatus !== "open") {
           client.disconnect();
@@ -768,9 +783,16 @@ export default function Home() {
             deviceId: deviceIdRef.current,
             sentAt: new Date().toISOString(),
           });
+          askedPeers = true;
         }
       }
+
+      await spun;
       setRefreshedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+      setRefreshResult(describeRefresh(before, caughtUp, askedPeers, syncStatus === "open"));
+    } catch {
+      await spun;
+      setRefreshResult({ tone: "warn", message: "Couldn't check just now — try again in a moment." });
     } finally {
       setRefreshing(false);
     }
@@ -990,6 +1012,8 @@ export default function Home() {
             </div>
           </header>
 
+          <RefreshBanner result={refreshResult} />
+
           {kid ? (
             <KidDashboard
               state={state}
@@ -1054,6 +1078,8 @@ export default function Home() {
             )}
           </div>
         </header>
+
+      <RefreshBanner result={refreshResult} />
 
       {state && (
         <JoinApprovalBanner
@@ -1245,6 +1271,69 @@ export default function Home() {
  * presence message — is what actually answers "is this doing anything." status === "open" but
  * peerCount <= 1 is called out separately so that distinction is visible instead of just "Synced".
  */
+interface RefreshResult {
+  tone: "ok" | "new" | "warn";
+  message: string;
+}
+
+/**
+ * Says what the refresh actually found, in the terms the person tapping it cares about: new money,
+ * nothing new, or couldn't reach anyone. "Up to date" is a real answer — it's the one that stops
+ * someone tapping again wondering whether the button works.
+ */
+function describeRefresh(
+  before: FamilyBankState | null,
+  after: FamilyBankState | null,
+  askedPeers: boolean,
+  online: boolean,
+): RefreshResult {
+  if (before && after && after !== before) {
+    const newTransactions = after.transactions.length - before.transactions.length;
+    const gained = round2(
+      after.transactions.slice(before.transactions.length).reduce((sum, entry) => sum + entry.amount, 0),
+    );
+    if (newTransactions > 0) {
+      return {
+        tone: "new",
+        message:
+          gained > 0
+            ? `Caught up — ${formatMoney(gained)} added (${newTransactions} new ${newTransactions === 1 ? "entry" : "entries"})`
+            : `Caught up — ${newTransactions} new ${newTransactions === 1 ? "entry" : "entries"}`,
+      };
+    }
+    return { tone: "new", message: "Caught up — investment values updated" };
+  }
+  if (!online) return { tone: "warn", message: "Up to date here — offline, so nothing from other devices" };
+  return { tone: "ok", message: askedPeers ? "Up to date — checked with your other devices" : "Up to date" };
+}
+
+function formatMoney(amount: number): string {
+  return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** The one-line answer a refresh leaves behind, under the header, for a few seconds. */
+function RefreshBanner({ result }: { result: RefreshResult | null }) {
+  if (!result) return null;
+  const tones: Record<RefreshResult["tone"], string> = {
+    ok: "border-black/10 dark:border-white/15",
+    new: "border-green-600/40 bg-green-600/10",
+    warn: "border-amber-500/40 bg-amber-500/10",
+  };
+  return (
+    <p
+      role="status"
+      aria-live="polite"
+      className={`animate-pop-in rounded-lg border px-3 py-2 text-sm ${tones[result.tone]}`}
+    >
+      {result.tone === "warn" ? "⚠️" : result.tone === "new" ? "✨" : "✓"} {result.message}
+    </p>
+  );
+}
+
 /**
  * The button that replaces reloading the page. Deliberately in the header of every screen, next to
  * the sync badge: the two answer the same question ("am I looking at the latest?"), and reaching
@@ -1266,9 +1355,13 @@ function RefreshButton({
       disabled={busy}
       aria-label="Refresh — check for new money and updates from other devices"
       title={refreshedAt ? `Last refreshed at ${refreshedAt}` : "Refresh"}
-      className="flex h-8 w-8 items-center justify-center rounded-full border border-black/20 text-base disabled:opacity-50 dark:border-white/20"
+      className={`flex h-9 w-9 items-center justify-center rounded-full border text-base transition active:scale-90 ${
+        busy
+          ? "border-black/40 bg-black/[0.06] dark:border-white/40 dark:bg-white/[0.12]"
+          : "border-black/20 dark:border-white/20"
+      }`}
     >
-      <span className={busy ? "inline-block animate-spin" : undefined} aria-hidden>
+      <span className={busy ? "inline-block animate-spin" : "inline-block"} aria-hidden>
         ↻
       </span>
     </button>
