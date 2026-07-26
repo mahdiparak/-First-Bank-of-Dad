@@ -18,6 +18,7 @@ import {
   KID_AVATARS,
   kidAvatar,
   PARENT_AVATARS,
+  type AuditActor,
   parentAvatar,
   type FamilyBankState,
   type KidProfile,
@@ -34,10 +35,12 @@ const inputClass =
  */
 export function ProfileSettingsPanel({
   state,
+  actor,
   onMutate,
   onAddKid,
 }: {
   state: FamilyBankState;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
   onAddKid: (values: AddKidFormValues) => void;
 }) {
@@ -49,7 +52,7 @@ export function ProfileSettingsPanel({
     event.preventDefault();
     try {
       setParentError(null);
-      onMutate((s) => addParentProfile(s, parentName, parentAvatarChoice));
+      onMutate((s) => addParentProfile(s, parentName, parentAvatarChoice, undefined, actor));
       setParentName("");
     } catch (error) {
       setParentError(error instanceof Error ? error.message : "Something went wrong.");
@@ -70,7 +73,7 @@ export function ProfileSettingsPanel({
         {parentError && <p className="text-sm text-red-500">{parentError}</p>}
         {state.parentProfiles.length === 0 && <p className="text-xs opacity-60">No parents named yet.</p>}
         {state.parentProfiles.map((parent) => (
-          <ParentProfileEditor key={parent.id} parent={parent} onMutate={onMutate} />
+          <ParentProfileEditor key={parent.id} parent={parent} actor={actor} onMutate={onMutate} />
         ))}
         <form onSubmit={handleAddParent} className="space-y-2">
           <div className="flex flex-wrap gap-1">
@@ -99,7 +102,7 @@ export function ProfileSettingsPanel({
             </button>
           </div>
         </form>
-        <SharedPinEditor state={state} onMutate={onMutate} />
+        <SharedPinEditor state={state} actor={actor} onMutate={onMutate} />
       </div>
 
       <div className="space-y-3 border-t border-black/10 pt-3 dark:border-white/10">
@@ -113,7 +116,7 @@ export function ProfileSettingsPanel({
         </p>
         {state.kids.length === 0 && <p className="text-xs opacity-60">No kids yet.</p>}
         {state.kids.map((kid) => (
-          <KidProfileEditor key={kid.id} kid={kid} onMutate={onMutate} />
+          <KidProfileEditor key={kid.id} kid={kid} actor={actor} onMutate={onMutate} />
         ))}
         <AddKidForm onSubmit={onAddKid} />
       </div>
@@ -127,9 +130,11 @@ export function ProfileSettingsPanel({
  */
 function SharedPinEditor({
   state,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [pin, setPin] = useState("");
@@ -143,13 +148,13 @@ function SharedPinEditor({
       return;
     }
     const hash = await hashPin(pin);
-    onMutate((s) => setParentPinHash(s, hash));
+    onMutate((s) => setParentPinHash(s, hash, actor));
     setPin("");
     setMessage("Shared PIN saved.");
   }
 
   function handleRemovePin() {
-    onMutate((s) => setParentPinHash(s, null));
+    onMutate((s) => setParentPinHash(s, null, actor));
     setMessage("Shared PIN removed.");
   }
 
@@ -185,9 +190,11 @@ function SharedPinEditor({
 
 function ParentProfileEditor({
   parent,
+  actor,
   onMutate,
 }: {
   parent: ParentProfile;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -200,13 +207,13 @@ function ParentProfileEditor({
   function handleSave(event: React.FormEvent) {
     event.preventDefault();
     if (!name.trim()) return;
-    onMutate((s) => updateParentProfile(s, parent.id, { name: name.trim(), avatar, email: email.trim() }));
+    onMutate((s) => updateParentProfile(s, parent.id, { name: name.trim(), avatar, email: email.trim() }, actor));
     setEditing(false);
   }
 
   function handleRemove() {
     if (window.confirm(`Remove ${parent.name} from the parents list?`)) {
-      onMutate((s) => removeParentProfile(s, parent.id));
+      onMutate((s) => removeParentProfile(s, parent.id, actor));
     }
   }
 
@@ -217,13 +224,13 @@ function ParentProfileEditor({
       return;
     }
     const hash = await hashPin(pin);
-    onMutate((s) => setParentProfilePin(s, parent.id, hash));
+    onMutate((s) => setParentProfilePin(s, parent.id, hash, actor));
     setPin("");
     setPinMessage("PIN saved.");
   }
 
   function handleRemovePin() {
-    onMutate((s) => setParentProfilePin(s, parent.id, null));
+    onMutate((s) => setParentProfilePin(s, parent.id, null, actor));
     setPinMessage("Personal PIN removed — falls back to the shared PIN, if any.");
   }
 
@@ -312,9 +319,11 @@ const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 
 function KidProfileEditor({
   kid,
+  actor,
   onMutate,
 }: {
   kid: KidProfile;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -336,16 +345,22 @@ function KidProfileEditor({
       setError(null);
       onMutate((s) =>
         updateKidAllowance(
-          updateKidProfile(s, kid.id, {
-            name: name.trim(),
-            avatar,
-            email: email.trim(),
-            age: Number(age) || kid.age,
-            viewMode,
-          }),
+          updateKidProfile(
+            s,
+            kid.id,
+            {
+              name: name.trim(),
+              avatar,
+              email: email.trim(),
+              age: Number(age) || kid.age,
+              viewMode,
+            },
+            actor,
+          ),
           kid.id,
           Number(allowance),
           Number(payday),
+          actor,
         ),
       );
       setEditing(false);
@@ -360,7 +375,7 @@ function KidProfileEditor({
         `Remove ${kid.name} and ALL their data (balance, goals, history, investments)? This cannot be undone.`,
       )
     ) {
-      onMutate((s) => removeKid(s, kid.id));
+      onMutate((s) => removeKid(s, kid.id, actor));
     }
   }
 
@@ -371,13 +386,13 @@ function KidProfileEditor({
       return;
     }
     const hash = await hashKidPin(pin);
-    onMutate((s) => setKidPin(s, kid.id, hash));
+    onMutate((s) => setKidPin(s, kid.id, hash, actor));
     setPin("");
     setPinMessage("PIN saved.");
   }
 
   function handleRemovePin() {
-    onMutate((s) => setKidPin(s, kid.id, null));
+    onMutate((s) => setKidPin(s, kid.id, null, actor));
     setPinMessage("PIN removed — this kid opens straight to their view after email login.");
   }
 

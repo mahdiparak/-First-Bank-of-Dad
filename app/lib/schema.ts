@@ -17,6 +17,12 @@ export interface KidProfile {
   pinHash?: string;
   /** Badge ids a parent has manually hidden (e.g. awarded by a data mistake). Badges are otherwise fully recomputed from state, never stored — this is the one override. */
   hiddenBadgeIds?: string[];
+  /**
+   * Which kinds of investing a parent has switched on for this kid. Unset means the age default
+   * (see unlockedAssetClassesFor): an older kid has everything, a little kid has nothing until a
+   * parent says otherwise.
+   */
+  unlockedAssetClasses?: AssetClass[];
 }
 
 /** Kids under this age get the simplified, picture-first UI. */
@@ -278,6 +284,33 @@ export function assetClassMeta(assetClass: AssetClass): AssetClassMeta {
   // hasOwn, not a plain lookup: a position carrying "constructor" or "toString" as its class would
   // otherwise resolve to something off Object.prototype instead of falling back.
   return Object.hasOwn(ASSET_CLASSES, assetClass) ? ASSET_CLASSES[assetClass] : UNKNOWN_ASSET_CLASS;
+}
+
+export const ALL_ASSET_CLASSES: AssetClass[] = ["savings", "cd", "stocks", "crypto"];
+
+/**
+ * What a parent is even allowed to switch on for this kid. A little kid gets the two that can't
+ * lose money — a savings account and a CD — because "your money went down and there's nothing you
+ * can do" is not a lesson a six-year-old can hold. The rollercoaster and the rocket wait for the
+ * older-kid view, which is a setting a parent can change the day they think it's time.
+ */
+export function investableAssetClassesFor(kid: KidProfile): AssetClass[] {
+  return isYoungKidView(kid) ? ["savings", "cd"] : ALL_ASSET_CLASSES;
+}
+
+/**
+ * What this kid can actually put money into right now. An older kid starts with everything (the
+ * behaviour every existing family already has); a little kid starts with nothing until a parent
+ * turns something on for them. Either way a parent can narrow it.
+ */
+export function unlockedAssetClassesFor(kid: KidProfile): AssetClass[] {
+  const investable = investableAssetClassesFor(kid);
+  if (!kid.unlockedAssetClasses) return isYoungKidView(kid) ? [] : investable;
+  return investable.filter((assetClass) => kid.unlockedAssetClasses?.includes(assetClass));
+}
+
+export function isAssetClassUnlocked(kid: KidProfile, assetClass: AssetClass): boolean {
+  return unlockedAssetClassesFor(kid).includes(assetClass);
 }
 
 export type WithdrawalStatus = "pending" | "approved" | "denied";

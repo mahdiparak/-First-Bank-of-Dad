@@ -3,7 +3,14 @@
 import { useState } from "react";
 import { daysUntilPayday } from "@/lib/allowance";
 import { autoInvestWeeklyTotal, setAutoInvestRule } from "@/lib/mutations";
-import { ASSET_CLASSES, type AssetClass, type FamilyBankState, type KidProfile } from "@/lib/schema";
+import {
+  ASSET_CLASSES,
+  isAssetClassUnlocked,
+  type AssetClass,
+  type AuditActor,
+  type FamilyBankState,
+  type KidProfile,
+} from "@/lib/schema";
 import { assetColor } from "./investment-plot";
 
 const ASSET_CLASS_ORDER: AssetClass[] = ["savings", "cd", "stocks", "crypto"];
@@ -20,10 +27,12 @@ const LOCK_OPTIONS = [4, 12, 26, 52];
 export function AutoInvest({
   state,
   kid,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kid: KidProfile;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [editing, setEditing] = useState<AssetClass | null>(null);
@@ -72,16 +81,23 @@ export function AutoInvest({
           const meta = ASSET_CLASSES[assetClass];
           const rule = rules.find((candidate) => candidate.assetClass === assetClass);
           const open = editing === assetClass;
+          // Same unlock gate as investing by hand: a locked class stays visible but can't be armed.
+          const unlocked = isAssetClassUnlocked(kid, assetClass);
 
           return (
-            <div key={assetClass} className="rounded-lg border border-black/10 p-3 dark:border-white/10">
+            <div
+              key={assetClass}
+              className={`rounded-lg border border-black/10 p-3 dark:border-white/10 ${unlocked ? "" : "opacity-55"}`}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">
-                    {meta.emoji} {meta.shortLabel}
+                    {unlocked ? meta.emoji : "🔒"} {meta.shortLabel}
                   </p>
                   <p className="text-xs opacity-70">
-                    {rule ? (
+                    {!unlocked ? (
+                      "Locked — ask a parent to turn this one on."
+                    ) : rule ? (
                       <span style={{ color: assetColor(assetClass) }}>
                         {formatCurrency(rule.weeklyAmount)} every payday
                         {assetClass === "cd" && rule.lockWeeks ? ` · locked ${rule.lockWeeks} weeks each time` : ""}
@@ -93,21 +109,22 @@ export function AutoInvest({
                 </div>
                 <button
                   type="button"
+                  disabled={!unlocked}
                   onClick={() => setEditing(open ? null : assetClass)}
-                  className="shrink-0 rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
+                  className="shrink-0 rounded-md border border-black/20 px-2 py-1 text-xs disabled:opacity-40 dark:border-white/20"
                 >
                   {open ? "Close" : rule ? "Change" : "Set it up"}
                 </button>
               </div>
 
-              {open && (
+              {open && unlocked && (
                 <RuleEditor
                   assetClass={assetClass}
                   netWeekly={netWeekly}
                   current={rule?.weeklyAmount ?? 0}
                   currentLockWeeks={rule?.lockWeeks}
                   onSave={(amount, lockWeeks) => {
-                    onMutate((s) => setAutoInvestRule(s, kid.id, assetClass, amount, lockWeeks));
+                    onMutate((s) => setAutoInvestRule(s, kid.id, assetClass, amount, lockWeeks, actor));
                     setEditing(null);
                   }}
                 />

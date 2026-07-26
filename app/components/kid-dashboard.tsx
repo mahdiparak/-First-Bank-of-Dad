@@ -40,6 +40,7 @@ import { InvestmentSandbox } from "./investment-sandbox";
 import { QuestBoard, QuestCard } from "./quest-board";
 import { WithdrawalPreview } from "./withdrawal-preview";
 import { WithdrawalConfirmDialog } from "./withdrawal-confirm";
+import { YoungInvest } from "./young-invest";
 import type { MarketDataResponse } from "@/lib/market-data";
 
 type KidTab = "home" | "goals" | "invest" | "quests" | "ledger";
@@ -351,6 +352,8 @@ function YoungKidHome({
 
       <GoalGetter state={state} kid={kid} role={role} actor={actor} onMutate={onMutate} young />
 
+      <YoungInvest state={state} kid={kid} role={role} marketData={marketData} actor={actor} onMutate={onMutate} />
+
       {openBounties.length > 0 && (
         <section className="space-y-3 rounded-3xl border-2 border-dashed border-amber-500/40 bg-amber-500/5 p-5">
           <p className="text-lg font-semibold">🗺️ Quest Board — earn extra money!</p>
@@ -382,7 +385,7 @@ function YoungKidHome({
                 </span>
                 {role === "parent" && (
                   <button
-                    onClick={() => onMutate((s) => removeTransaction(s, transaction.id))}
+                    onClick={() => onMutate((s) => removeTransaction(s, transaction.id, actor))}
                     aria-label="Delete this transaction"
                     className="text-sm opacity-50"
                   >
@@ -438,7 +441,7 @@ function YoungSpendForm({
   }
 
   function handleConfirm() {
-    onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category));
+    onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category, undefined, actor));
     setAmount("");
     setAsked(true);
     setPlanned(false);
@@ -587,7 +590,7 @@ function GoalGetter({
 
       <div className="space-y-4">
         {goals.map((goal) => (
-          <GoalRow key={goal.id} state={state} goal={goal} kid={kid} role={role} young={young} onMutate={onMutate} />
+          <GoalRow key={goal.id} state={state} goal={goal} kid={kid} role={role} young={young} actor={actor} onMutate={onMutate} />
         ))}
       </div>
 
@@ -660,6 +663,7 @@ function GoalRow({
   kid,
   role,
   young,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
@@ -667,6 +671,7 @@ function GoalRow({
   kid: KidProfile;
   role: "parent" | "kid";
   young: boolean;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [showCalendar, setShowCalendar] = useState(false);
@@ -682,7 +687,7 @@ function GoalRow({
   );
 
   function saveAutoSave() {
-    onMutate((s) => setGoalWeeklyContribution(s, goal.id, Number(autoSaveInput) || 0));
+    onMutate((s) => setGoalWeeklyContribution(s, goal.id, Number(autoSaveInput) || 0, actor));
     setEditingAutoSave(false);
   }
 
@@ -724,14 +729,14 @@ function GoalRow({
               📅 {showCalendar ? "Hide" : "Show"} calendar
             </button>
           )}
-          {role === "parent" && <DeleteGoalButton goalId={goal.id} onMutate={onMutate} />}
+          {role === "parent" && <DeleteGoalButton goalId={goal.id} actor={actor} onMutate={onMutate} />}
         </div>
       )}
 
       {goal.completedAt && pendingSpend && <span className="text-xs opacity-70">Asked Dad — waiting 🕐</span>}
       {goal.completedAt && !pendingSpend && (
         <button
-          onClick={() => onMutate((s) => requestGoalSpend(s, goal.id))}
+          onClick={() => onMutate((s) => requestGoalSpend(s, goal.id, actor))}
           className={`rounded-md bg-green-600 text-white ${young ? "px-4 py-2 text-base" : "px-3 py-1 text-xs"}`}
         >
           Spend it! 🎉
@@ -765,16 +770,18 @@ function GoalRow({
 
 function DeleteGoalButton({
   goalId,
+  actor,
   onMutate,
 }: {
   goalId: string;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   return (
     <button
       onClick={() => {
         if (window.confirm("Delete this goal? Saved money returns to the available balance.")) {
-          onMutate((s) => deleteGoal(s, goalId));
+          onMutate((s) => deleteGoal(s, goalId, actor));
         }
       }}
       className="ml-auto text-xs text-red-500"
@@ -816,7 +823,7 @@ function Ledger({
   }
 
   function handleConfirm() {
-    onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category, memo.trim() || undefined));
+    onMutate((s) => requestWithdrawal(s, kid.id, Number(amount), category, memo.trim() || undefined, actor));
     setAmount("");
     setMemo("");
     setPlanned(null);
@@ -969,7 +976,7 @@ function Ledger({
                 </span>
                 {role === "parent" && (
                   <button
-                    onClick={() => onMutate((s) => removeTransaction(s, row.item.id))}
+                    onClick={() => onMutate((s) => removeTransaction(s, row.item.id, actor))}
                     aria-label="Delete this transaction"
                     className="text-xs opacity-50"
                   >

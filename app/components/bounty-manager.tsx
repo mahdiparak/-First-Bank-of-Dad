@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { createBounty, deleteBounty } from "@/lib/mutations";
-import { QUEST_ICONS, questIcon, questTier, type FamilyBankState } from "@/lib/schema";
+import { QUEST_ICONS, questIcon, questTier, type AuditActor, type FamilyBankState } from "@/lib/schema";
 
 const inputClass =
   "rounded-md border border-black/20 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
@@ -10,9 +10,11 @@ const inputClass =
 /** Posting and managing open gigs — an everyday money action, so it lives in the Money tab; Approvals stays a pure review queue. */
 export function BountyManager({
   state,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +34,7 @@ export function BountyManager({
   function handleCreate(event: React.FormEvent) {
     event.preventDefault();
     if (!title.trim() || !reward) return;
-    tryMutate((s) => createBounty(s, title.trim(), Number(reward), icon));
+    tryMutate((s) => createBounty(s, title.trim(), Number(reward), icon, actor));
     setTitle("");
     setReward("");
   }
@@ -61,7 +63,7 @@ export function BountyManager({
             </span>
             <div className="flex items-center gap-3">
               <span className="opacity-70">{formatCurrency(bounty.reward)}</span>
-              <button onClick={() => tryMutate((s) => deleteBounty(s, bounty.id))} className="text-xs text-red-500">
+              <button onClick={() => tryMutate((s) => deleteBounty(s, bounty.id, actor))} className="text-xs text-red-500">
                 Remove
               </button>
             </div>

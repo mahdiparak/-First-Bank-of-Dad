@@ -1,4 +1,4 @@
-import { KID_COLORS, type AssetClass, type AuditActor, type AuditUndo, type DadMatchMilestone, type FamilyBankState, type InvestmentPosition, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
+import { ALL_ASSET_CLASSES, ASSET_CLASSES, investableAssetClassesFor, KID_COLORS, unlockedAssetClassesFor, type AssetClass, type AuditActor, type AuditUndo, type DadMatchMilestone, type FamilyBankState, type InvestmentPosition, type KidProfile, type ParentSettings, type TransactionSource } from "./schema";
 
 function touch(state: FamilyBankState): FamilyBankState {
   return { ...state, updatedAt: new Date().toISOString() };
@@ -36,6 +36,13 @@ function kidName(state: FamilyBankState, kidId: string): string {
 
 function goalName(state: FamilyBankState, goalId: string): string {
   return state.goals.find((goal) => goal.id === goalId)?.name ?? "a goal";
+}
+
+/** Names the fields a profile patch changed, never their values — an email or a PIN has no
+ *  business being written into a log the whole family can read. */
+function describePatch(patch: Record<string, unknown>): string {
+  const fields = Object.keys(patch).filter((key) => patch[key] !== undefined);
+  return fields.length > 0 ? fields.join(", ") : "no changes";
 }
 
 function formatCurrency(amount: number): string {
@@ -84,6 +91,7 @@ export function addKid(
     /** Money the kid already has when they join — recorded as an opening deposit so history starts truthful. */
     startingBalance?: number;
   },
+  actor?: AuditActor,
 ): FamilyBankState {
   const { startingBalance, ...profile } = input;
   const now = new Date().toISOString();
@@ -99,8 +107,17 @@ export function addKid(
     taxPots: [...state.taxPots, { kidId: kid.id, balance: 0, rate: state.parentSettings.taxRate, totalPaid: 0 }],
     streaks: [...state.streaks, { kidId: kid.id, weeksWithoutWithdrawal: 0 }],
   });
-  if (!startingBalance || startingBalance <= 0) return withKid;
-  return recordTransaction(withKid, kid.id, startingBalance, "🏦", "manual-deposit", "Starting balance", now);
+  const opened =
+    !startingBalance || startingBalance <= 0
+      ? withKid
+      : recordTransaction(withKid, kid.id, startingBalance, "🏦", "manual-deposit", "Starting balance", now);
+  if (!actor) return opened;
+  return logAudit(
+    opened,
+    actor,
+    `Added ${kid.name} (${formatCurrency(kid.weeklyAllowance)}/wk allowance${startingBalance ? `, starting with ${formatCurrency(startingBalance)}` : ""})`,
+    { kidId: kid.id },
+  );
 }
 
 export function recordTransaction(
@@ -130,11 +147,23 @@ export function recordTransaction(
 }
 
 /** Parent-side: erases a transaction entirely (e.g. a test entry), rather than offsetting it with a reversal. */
-export function removeTransaction(state: FamilyBankState, transactionId: string): FamilyBankState {
-  return touch({
+export function removeTransaction(
+  state: FamilyBankState,
+  transactionId: string,
+  actor?: AuditActor,
+): FamilyBankState {
+  const transaction = state.transactions.find((candidate) => candidate.id === transactionId);
+  const without = touch({
     ...state,
-    transactions: state.transactions.filter((transaction) => transaction.id !== transactionId),
+    transactions: state.transactions.filter((candidate) => candidate.id !== transactionId),
   });
+  if (!actor || !transaction) return without;
+  return logAudit(
+    without,
+    actor,
+    `Deleted a ${formatCurrency(Math.abs(transaction.amount))} ${transaction.amount < 0 ? "charge" : "credit"} from ${kidName(state, transaction.kidId)}'s ledger${transaction.memo ? ` (${transaction.memo})` : ""}`,
+    { kidId: transaction.kidId },
+  );
 }
 
 /** Kid-side: asks a parent for money to spend. Nothing leaves the balance until approved. */
@@ -144,12 +173,13 @@ export function requestWithdrawal(
   amount: number,
   category: string,
   reason?: string,
+  actor?: AuditActor,
 ): FamilyBankState {
   if (amount <= 0) throw new Error("Amount must be positive.");
   const available = availableBalanceForKid(state, kidId);
   if (amount > available) throw new Error("That's more than the available balance.");
 
-  return touch({
+  const requested = touch({
     ...state,
     withdrawalRequests: [
       ...state.withdrawalRequests,
@@ -164,6 +194,13 @@ export function requestWithdrawal(
       },
     ],
   });
+  if (!actor) return requested;
+  return logAudit(
+    requested,
+    actor,
+    `${kidName(state, kidId)} asked to spend ${formatCurrency(amount)}${reason ? ` on ${reason}` : ""}`,
+    { kidId },
+  );
 }
 
 /**
@@ -171,7 +208,7 @@ export function requestWithdrawal(
  * deliberately does NOT reset the Dad Match streak — planned spending is the win condition,
  * not a failure.
  */
-export function requestGoalSpend(state: FamilyBankState, goalId: string): FamilyBankState {
+export function requestGoalSpend(state: FamilyBankState, goalId: string, actor?: AuditActor): FamilyBankState {
   const goal = state.goals.find((candidate) => candidate.id === goalId);
   if (!goal) throw new Error("Goal not found.");
   if (!goal.completedAt || goal.spentAt) throw new Error("This goal isn't ready to spend.");
@@ -180,7 +217,7 @@ export function requestGoalSpend(state: FamilyBankState, goalId: string): Family
     throw new Error("Already asked — waiting for Dad.");
   }
 
-  return touch({
+  const requested = touch({
     ...state,
     withdrawalRequests: [
       ...state.withdrawalRequests,
@@ -196,6 +233,13 @@ export function requestGoalSpend(state: FamilyBankState, goalId: string): Family
       },
     ],
   });
+  if (!actor) return requested;
+  return logAudit(
+    requested,
+    actor,
+    `${kidName(state, goal.kidId)} asked to spend their finished goal "${goal.name}" (${formatCurrency(goal.savedAmount)})`,
+    { kidId: goal.kidId },
+  );
 }
 
 /** Parent-side: approves a pending withdrawal, which is what actually debits the kid's balance. */
@@ -250,14 +294,22 @@ export function approveWithdrawal(state: FamilyBankState, requestId: string, act
 }
 
 /** Parent-side: denies a pending withdrawal. Nothing changes for the kid's balance. */
-export function denyWithdrawal(state: FamilyBankState, requestId: string): FamilyBankState {
+export function denyWithdrawal(state: FamilyBankState, requestId: string, actor?: AuditActor): FamilyBankState {
   const now = new Date().toISOString();
-  return touch({
+  const request = state.withdrawalRequests.find((candidate) => candidate.id === requestId);
+  const denied = touch({
     ...state,
     withdrawalRequests: state.withdrawalRequests.map((candidate) =>
       candidate.id === requestId ? { ...candidate, status: "denied", resolvedAt: now } : candidate,
     ),
   });
+  if (!actor || !request) return denied;
+  return logAudit(
+    denied,
+    actor,
+    `Said no to ${kidName(state, request.kidId)}'s ${formatCurrency(request.amount)} spending request`,
+    { kidId: request.kidId },
+  );
 }
 
 export function createGoal(
@@ -300,11 +352,12 @@ export function setGoalWeeklyContribution(
   state: FamilyBankState,
   goalId: string,
   weeklyContribution: number,
+  actor?: AuditActor,
 ): FamilyBankState {
   if (weeklyContribution < 0) throw new Error("Weekly savings amount can't be negative.");
   const goal = state.goals.find((candidate) => candidate.id === goalId);
   if (!goal) throw new Error("Goal not found.");
-  return touch({
+  const updated = touch({
     ...state,
     goals: state.goals.map((candidate) =>
       candidate.id === goalId
@@ -312,6 +365,15 @@ export function setGoalWeeklyContribution(
         : candidate,
     ),
   });
+  if (!actor) return updated;
+  return logAudit(
+    updated,
+    actor,
+    weeklyContribution > 0
+      ? `Set "${goal.name}" to auto-save ${formatCurrency(weeklyContribution)} a payday for ${kidName(state, goal.kidId)}`
+      : `Turned off auto-saving toward "${goal.name}" for ${kidName(state, goal.kidId)}`,
+    { kidId: goal.kidId },
+  );
 }
 
 /**
@@ -356,47 +418,77 @@ export function updateKidAllowance(
   kidId: string,
   weeklyAllowance: number,
   paydayWeekday: number,
+  actor?: AuditActor,
 ): FamilyBankState {
   if (weeklyAllowance < 0) throw new Error("Allowance can't be negative.");
-  return touch({
+  const previous = state.kids.find((kid) => kid.id === kidId);
+  const updated = touch({
     ...state,
     kids: state.kids.map((kid) => (kid.id === kidId ? { ...kid, weeklyAllowance, paydayWeekday } : kid)),
   });
+  if (!actor) return updated;
+  return logAudit(
+    updated,
+    actor,
+    `Set ${kidName(state, kidId)}'s allowance to ${formatCurrency(weeklyAllowance)}/wk${
+      previous && previous.weeklyAllowance !== weeklyAllowance ? ` (was ${formatCurrency(previous.weeklyAllowance)})` : ""
+    }`,
+    { kidId },
+  );
 }
 
 /** Adds a named parent/guardian profile, so a device can greet whoever's using it by name. */
-export function addParentProfile(state: FamilyBankState, name: string, avatar?: string, age?: number): FamilyBankState {
+export function addParentProfile(
+  state: FamilyBankState,
+  name: string,
+  avatar?: string,
+  age?: number,
+  actor?: AuditActor,
+): FamilyBankState {
   if (!name.trim()) throw new Error("Enter a name.");
-  return touch({
+  const added = touch({
     ...state,
     parentProfiles: [
       ...state.parentProfiles,
       { id: crypto.randomUUID(), name: name.trim(), avatar, age, createdAt: new Date().toISOString() },
     ],
   });
+  return actor ? logAudit(added, actor, `Added ${name.trim()} as a parent`) : added;
 }
 
 export function updateParentProfile(
   state: FamilyBankState,
   parentId: string,
   patch: { name?: string; avatar?: string; email?: string },
+  actor?: AuditActor,
 ): FamilyBankState {
-  return touch({
+  const previous = state.parentProfiles.find((parent) => parent.id === parentId);
+  const updated = touch({
     ...state,
     parentProfiles: state.parentProfiles.map((parent) => (parent.id === parentId ? { ...parent, ...patch } : parent)),
   });
+  if (!actor) return updated;
+  return logAudit(updated, actor, `Updated ${previous?.name ?? "a parent"}'s profile (${describePatch(patch)})`);
 }
 
-export function removeParentProfile(state: FamilyBankState, parentId: string): FamilyBankState {
-  return touch({
+export function removeParentProfile(state: FamilyBankState, parentId: string, actor?: AuditActor): FamilyBankState {
+  const removed = state.parentProfiles.find((parent) => parent.id === parentId);
+  const without = touch({
     ...state,
     parentProfiles: state.parentProfiles.filter((parent) => parent.id !== parentId),
   });
+  return actor ? logAudit(without, actor, `Removed the parent profile ${removed?.name ?? ""}`.trim()) : without;
 }
 
 /** Sets, changes, or (passing null) removes this parent's own PIN. Any parent can change any parent's PIN. */
-export function setParentProfilePin(state: FamilyBankState, parentId: string, pinHash: string | null): FamilyBankState {
-  return touch({
+export function setParentProfilePin(
+  state: FamilyBankState,
+  parentId: string,
+  pinHash: string | null,
+  actor?: AuditActor,
+): FamilyBankState {
+  const parentProfile = state.parentProfiles.find((parent) => parent.id === parentId);
+  const updated = touch({
     ...state,
     parentProfiles: state.parentProfiles.map((parent) => {
       if (parent.id !== parentId) return parent;
@@ -409,6 +501,8 @@ export function setParentProfilePin(state: FamilyBankState, parentId: string, pi
       return next;
     }),
   });
+  if (!actor) return updated;
+  return logAudit(updated, actor, `${pinHash ? "Set" : "Removed"} ${parentProfile?.name ?? "a parent"}'s PIN`);
 }
 
 /** Parent-only: rename a kid, change their avatar/color, or set the email for a kid with their own device. */
@@ -416,16 +510,24 @@ export function updateKidProfile(
   state: FamilyBankState,
   kidId: string,
   patch: { name?: string; avatar?: string; color?: string; age?: number; email?: string; viewMode?: KidProfile["viewMode"] },
+  actor?: AuditActor,
 ): FamilyBankState {
-  return touch({
+  const updated = touch({
     ...state,
     kids: state.kids.map((kid) => (kid.id === kidId ? { ...kid, ...patch } : kid)),
   });
+  if (!actor) return updated;
+  return logAudit(updated, actor, `Updated ${kidName(state, kidId)}'s profile (${describePatch(patch)})`, { kidId });
 }
 
 /** Parent-only: sets, changes, or (passing null) removes a kid's own PIN for opening their Kid View. */
-export function setKidPin(state: FamilyBankState, kidId: string, pinHash: string | null): FamilyBankState {
-  return touch({
+export function setKidPin(
+  state: FamilyBankState,
+  kidId: string,
+  pinHash: string | null,
+  actor?: AuditActor,
+): FamilyBankState {
+  const updated = touch({
     ...state,
     kids: state.kids.map((kid) => {
       if (kid.id !== kidId) return kid;
@@ -438,6 +540,46 @@ export function setKidPin(state: FamilyBankState, kidId: string, pinHash: string
       return next;
     }),
   });
+  if (!actor) return updated;
+  return logAudit(updated, actor, `${pinHash ? "Set" : "Removed"} ${kidName(state, kidId)}'s PIN`, { kidId });
+}
+
+/**
+ * Parent-only: switches one kind of investing on or off for one kid. Refuses anything outside what
+ * that kid's view allows at all (see investableAssetClassesFor), so a stray call can't hand a
+ * six-year-old the crypto button.
+ */
+export function setAssetClassUnlocked(
+  state: FamilyBankState,
+  kidId: string,
+  assetClass: AssetClass,
+  unlocked: boolean,
+  actor: AuditActor,
+): FamilyBankState {
+  const kid = state.kids.find((candidate) => candidate.id === kidId);
+  if (!kid) throw new Error("Kid not found.");
+  if (unlocked && !investableAssetClassesFor(kid).includes(assetClass)) {
+    throw new Error(`${ASSET_CLASSES[assetClass].shortLabel} isn't available for ${kid.name} yet.`);
+  }
+
+  const current = new Set(unlockedAssetClassesFor(kid));
+  if (unlocked) current.add(assetClass);
+  else current.delete(assetClass);
+
+  const updated = touch({
+    ...state,
+    kids: state.kids.map((candidate) =>
+      candidate.id === kidId
+        ? { ...candidate, unlockedAssetClasses: ALL_ASSET_CLASSES.filter((entry) => current.has(entry)) }
+        : candidate,
+    ),
+  });
+  return logAudit(
+    updated,
+    actor,
+    `${unlocked ? "Unlocked" : "Locked"} ${ASSET_CLASSES[assetClass].shortLabel} investing for ${kid.name}`,
+    { kidId },
+  );
 }
 
 /** Parent-only: hides or restores a badge that was awarded by mistake. Badges are otherwise fully
@@ -469,8 +611,10 @@ export function setBadgeHidden(
 }
 
 /** Parent-only: removes a kid and everything tied to them. Irreversible — the UI must confirm. */
-export function removeKid(state: FamilyBankState, kidId: string): FamilyBankState {
-  return touch({
+export function removeKid(state: FamilyBankState, kidId: string, actor?: AuditActor): FamilyBankState {
+  const name = kidName(state, kidId);
+  const balance = totalBalanceForKid(state, kidId);
+  const without = touch({
     ...state,
     kids: state.kids.filter((kid) => kid.id !== kidId),
     transactions: state.transactions.filter((transaction) => transaction.kidId !== kidId),
@@ -490,58 +634,115 @@ export function removeKid(state: FamilyBankState, kidId: string): FamilyBankStat
       actualHysaBalances: state.reconciliation.actualHysaBalances.filter((entry) => entry.kidId !== kidId),
     },
   });
+  if (!actor) return without;
+  // Deliberately keeps the log line after everything of theirs is gone: the record that a kid and
+  // their whole history were removed is exactly the thing a family shouldn't lose silently.
+  return logAudit(without, actor, `Removed ${name} and all their history (${formatCurrency(balance)} balance)`);
 }
 
 /** Deletes a goal; any earmarked money automatically returns to the available balance. */
-export function deleteGoal(state: FamilyBankState, goalId: string): FamilyBankState {
+export function deleteGoal(state: FamilyBankState, goalId: string, actor?: AuditActor): FamilyBankState {
   if (state.withdrawalRequests.some((request) => request.goalId === goalId && request.status === "pending")) {
     throw new Error("A spend request for this goal is waiting for approval.");
   }
-  return touch({ ...state, goals: state.goals.filter((goal) => goal.id !== goalId) });
+  const goal = state.goals.find((candidate) => candidate.id === goalId);
+  const without = touch({ ...state, goals: state.goals.filter((candidate) => candidate.id !== goalId) });
+  if (!actor || !goal) return without;
+  return logAudit(
+    without,
+    actor,
+    `Deleted ${kidName(state, goal.kidId)}'s goal "${goal.name}" — ${formatCurrency(goal.savedAmount)} went back to their spendable balance`,
+    { kidId: goal.kidId },
+  );
 }
 
 /** Parent-only: removes an open (unclaimed) bounty from the board. */
-export function deleteBounty(state: FamilyBankState, bountyId: string): FamilyBankState {
+export function deleteBounty(state: FamilyBankState, bountyId: string, actor?: AuditActor): FamilyBankState {
   const bounty = state.bounties.find((candidate) => candidate.id === bountyId);
   if (!bounty || bounty.status !== "open") throw new Error("Only open bounties can be removed.");
-  return touch({ ...state, bounties: state.bounties.filter((candidate) => candidate.id !== bountyId) });
+  const without = touch({ ...state, bounties: state.bounties.filter((candidate) => candidate.id !== bountyId) });
+  return actor ? logAudit(without, actor, `Removed the quest "${bounty.title}" (${formatCurrency(bounty.reward)})`) : without;
 }
 
 /** Parent-only: the HYSA/CD rates, Family Tax rate, and Dad Match milestones. */
 export function updateParentSettings(
   state: FamilyBankState,
   patch: Partial<Omit<ParentSettings, "parentPinHash">>,
+  actor?: AuditActor,
 ): FamilyBankState {
-  return touch({ ...state, parentSettings: { ...state.parentSettings, ...patch } });
+  const updated = touch({ ...state, parentSettings: { ...state.parentSettings, ...patch } });
+  if (!actor) return updated;
+  const changes = describeSettingsChange(state.parentSettings, patch);
+  return changes ? logAudit(updated, actor, `Changed family settings — ${changes}`) : updated;
+}
+
+/** Spells out which family rules moved and to what, so "changed settings" is never a mystery. */
+function describeSettingsChange(
+  previous: ParentSettings,
+  patch: Partial<Omit<ParentSettings, "parentPinHash">>,
+): string {
+  const parts: string[] = [];
+  const percent = (value: number) => `${(value * 100).toFixed(2)}%`;
+  if (patch.hysaApr !== undefined && patch.hysaApr !== previous.hysaApr) {
+    parts.push(`savings rate ${percent(previous.hysaApr)} → ${percent(patch.hysaApr)}`);
+  }
+  if (patch.cdApr !== undefined && patch.cdApr !== previous.cdApr) {
+    parts.push(`CD rate ${percent(previous.cdApr)} → ${percent(patch.cdApr)}`);
+  }
+  if (patch.taxRate !== undefined && patch.taxRate !== previous.taxRate) {
+    parts.push(`family tax ${percent(previous.taxRate)} → ${percent(patch.taxRate)}`);
+  }
+  if (patch.investmentMinHoldDays !== undefined && patch.investmentMinHoldDays !== previous.investmentMinHoldDays) {
+    parts.push(`minimum hold ${previous.investmentMinHoldDays} → ${patch.investmentMinHoldDays} days`);
+  }
+  if (patch.dadMatchMilestones && JSON.stringify(patch.dadMatchMilestones) !== JSON.stringify(previous.dadMatchMilestones)) {
+    parts.push(`Dad Match milestones (${patch.dadMatchMilestones.length})`);
+  }
+  return parts.join(", ");
 }
 
 export function setDadMatchMilestones(
   state: FamilyBankState,
   milestones: DadMatchMilestone[],
+  actor?: AuditActor,
 ): FamilyBankState {
-  return updateParentSettings(state, {
-    dadMatchMilestones: milestones.slice().sort((a, b) => a.weeks - b.weeks),
-  });
+  return updateParentSettings(
+    state,
+    { dadMatchMilestones: milestones.slice().sort((a, b) => a.weeks - b.weeks) },
+    actor,
+  );
 }
 
 /** Sets, changes, or (passing null) removes the PIN gating Kid View -> Parent Command Center. */
-export function setParentPinHash(state: FamilyBankState, pinHash: string | null): FamilyBankState {
+export function setParentPinHash(
+  state: FamilyBankState,
+  pinHash: string | null,
+  actor?: AuditActor,
+): FamilyBankState {
   const parentSettings = { ...state.parentSettings };
   if (pinHash) {
     parentSettings.parentPinHash = pinHash;
   } else {
     delete parentSettings.parentPinHash;
   }
-  return touch({ ...state, parentSettings });
+  const updated = touch({ ...state, parentSettings });
+  return actor ? logAudit(updated, actor, `${pinHash ? "Set" : "Removed"} the shared Parent PIN`) : updated;
 }
 
 /** Parent-side: posts a new gig on the Quest Board. */
-export function createBounty(state: FamilyBankState, title: string, reward: number, icon?: string): FamilyBankState {
+export function createBounty(
+  state: FamilyBankState,
+  title: string,
+  reward: number,
+  icon?: string,
+  actor?: AuditActor,
+): FamilyBankState {
   if (reward <= 0) throw new Error("Reward must be positive.");
-  return touch({
+  const created = touch({
     ...state,
     bounties: [...state.bounties, { id: crypto.randomUUID(), title, reward, status: "open", icon }],
   });
+  return actor ? logAudit(created, actor, `Posted the quest "${title}" for ${formatCurrency(reward)}`) : created;
 }
 
 /** Kid-side: claims an open bounty, putting it in the parent's approval queue. */
@@ -646,14 +847,20 @@ export function resolveEnvelope(
 }
 
 /** Parent-side: denies a claim and reopens the bounty for anyone to try again. */
-export function denyBounty(state: FamilyBankState, bountyId: string): FamilyBankState {
-  return touch({
+export function denyBounty(state: FamilyBankState, bountyId: string, actor?: AuditActor): FamilyBankState {
+  const bounty = state.bounties.find((candidate) => candidate.id === bountyId);
+  const denied = touch({
     ...state,
     bounties: state.bounties.map((candidate) =>
       candidate.id === bountyId
         ? { ...candidate, status: "open", claimedByKidId: undefined, claimedAt: undefined }
         : candidate,
     ),
+  });
+  if (!actor || !bounty) return denied;
+  const claimant = bounty.claimedByKidId ? kidName(state, bounty.claimedByKidId) : "a kid";
+  return logAudit(denied, actor, `Sent "${bounty.title}" back to the quest board — ${claimant}'s claim wasn't approved`, {
+    kidId: bounty.claimedByKidId,
   });
 }
 
@@ -699,7 +906,12 @@ export function parentCashLiability(state: FamilyBankState): number {
 }
 
 /** Parent-side: records what a specific kid's real HYSA account balance actually is right now. */
-export function setActualHysaBalanceForKid(state: FamilyBankState, kidId: string, amount: number): FamilyBankState {
+export function setActualHysaBalanceForKid(
+  state: FamilyBankState,
+  kidId: string,
+  amount: number,
+  actor?: AuditActor,
+): FamilyBankState {
   const now = new Date().toISOString();
   const existing = state.reconciliation.actualHysaBalances.some((entry) => entry.kidId === kidId);
   const actualHysaBalances = existing
@@ -708,7 +920,11 @@ export function setActualHysaBalanceForKid(state: FamilyBankState, kidId: string
       )
     : [...state.reconciliation.actualHysaBalances, { kidId, balance: amount, lastUpdatedAt: now }];
 
-  return touch({ ...state, reconciliation: { ...state.reconciliation, actualHysaBalances } });
+  const updated = touch({ ...state, reconciliation: { ...state.reconciliation, actualHysaBalances } });
+  if (!actor) return updated;
+  return logAudit(updated, actor, `Recorded ${kidName(state, kidId)}'s real bank balance as ${formatCurrency(amount)}`, {
+    kidId,
+  });
 }
 
 /**
@@ -736,9 +952,14 @@ export function recordCashMovementForKid(
 }
 
 /** Parent-side: a general reconciliation note not tied to any one kid (e.g. bank-paid interest). */
-export function addCashAdjustment(state: FamilyBankState, amount: number, note?: string): FamilyBankState {
+export function addCashAdjustment(
+  state: FamilyBankState,
+  amount: number,
+  note?: string,
+  actor?: AuditActor,
+): FamilyBankState {
   if (amount === 0) throw new Error("Amount can't be zero.");
-  return touch({
+  const added = touch({
     ...state,
     reconciliation: {
       ...state.reconciliation,
@@ -748,18 +969,31 @@ export function addCashAdjustment(state: FamilyBankState, amount: number, note?:
       ],
     },
   });
+  if (!actor) return added;
+  return logAudit(
+    added,
+    actor,
+    `Recorded a ${formatCurrency(Math.abs(amount))} family-wide cash ${amount > 0 ? "credit" : "correction"}${note ? ` (${note})` : ""}`,
+  );
 }
 
-export function removeCashAdjustment(state: FamilyBankState, adjustmentId: string): FamilyBankState {
-  return touch({
+export function removeCashAdjustment(
+  state: FamilyBankState,
+  adjustmentId: string,
+  actor?: AuditActor,
+): FamilyBankState {
+  const adjustment = state.reconciliation.cashAdjustments.find((candidate) => candidate.id === adjustmentId);
+  const without = touch({
     ...state,
     reconciliation: {
       ...state.reconciliation,
       cashAdjustments: state.reconciliation.cashAdjustments.filter(
-        (adjustment) => adjustment.id !== adjustmentId,
+        (candidate) => candidate.id !== adjustmentId,
       ),
     },
   });
+  if (!actor || !adjustment) return without;
+  return logAudit(without, actor, `Removed a ${formatCurrency(Math.abs(adjustment.amount))} cash correction`);
 }
 
 /** Lifetime Family Tax withheld from this kid's allowance so far — survives tax refunds, unlike the pot balance. */
@@ -875,17 +1109,28 @@ export function setAutoInvestRule(
   assetClass: AssetClass,
   weeklyAmount: number,
   lockWeeks: number | undefined,
+  actor?: AuditActor,
 ): FamilyBankState {
   if (!Number.isFinite(weeklyAmount) || weeklyAmount < 0) throw new Error("That's not an amount.");
+  // Turning a rule ON is subject to the same parent unlock as investing by hand — otherwise a
+  // standing order would be a way around a class a parent switched off. Turning one OFF always works.
+  const owner = state.kids.find((candidate) => candidate.id === kidId);
+  if (round2(weeklyAmount) > 0 && owner && !unlockedAssetClassesFor(owner).includes(assetClass)) {
+    throw new Error(`${ASSET_CLASSES[assetClass].shortLabel} isn't unlocked for ${owner.name} yet.`);
+  }
   const others = state.autoInvestRules.filter(
     (rule) => !(rule.kidId === kidId && rule.assetClass === assetClass),
   );
-  if (round2(weeklyAmount) <= 0) return touch({ ...state, autoInvestRules: others });
+  if (round2(weeklyAmount) <= 0) {
+    const cleared = touch({ ...state, autoInvestRules: others });
+    if (!actor) return cleared;
+    return logAudit(cleared, actor, `${kidName(state, kidId)} turned off auto-investing into ${assetClass}`, { kidId });
+  }
 
   const existing = state.autoInvestRules.find(
     (rule) => rule.kidId === kidId && rule.assetClass === assetClass,
   );
-  return touch({
+  const updated = touch({
     ...state,
     autoInvestRules: [
       ...others,
@@ -899,6 +1144,13 @@ export function setAutoInvestRule(
       },
     ],
   });
+  if (!actor) return updated;
+  return logAudit(
+    updated,
+    actor,
+    `${kidName(state, kidId)} set auto-investing into ${assetClass} to ${formatCurrency(round2(weeklyAmount))} every payday`,
+    { kidId },
+  );
 }
 
 /** What this kid has committed to investing out of every payday, across all their rules. */

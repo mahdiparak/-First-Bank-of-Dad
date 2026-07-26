@@ -54,7 +54,7 @@ export function ApprovalQueue({
                 Approve
               </button>
               <button
-                onClick={() => tryMutate((s) => denyWithdrawal(s, request.id))}
+                onClick={() => tryMutate((s) => denyWithdrawal(s, request.id, actor))}
                 className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
               >
                 Deny
@@ -82,7 +82,7 @@ export function ApprovalQueue({
                 Approve
               </button>
               <button
-                onClick={() => tryMutate((s) => denyBounty(s, bounty.id))}
+                onClick={() => tryMutate((s) => denyBounty(s, bounty.id, actor))}
                 className="rounded-md border border-black/20 px-2 py-1 text-xs dark:border-white/20"
               >
                 Deny

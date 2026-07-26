@@ -13,6 +13,7 @@ import {
 import {
   ASSET_CLASSES,
   assetClassMeta,
+  isAssetClassUnlocked,
   kidColor,
   type AssetClass,
   type AssetClassMeta,
@@ -100,7 +101,7 @@ export function InvestmentSandbox({
       />
 
       {/* Last, on purpose: decide in the moment first, then decide once and stop deciding. */}
-      <AutoInvest state={state} kid={kid} onMutate={tryMutate} />
+      <AutoInvest state={state} kid={kid} actor={actor} onMutate={tryMutate} />
     </div>
   );
 }
@@ -333,6 +334,10 @@ function NewInvestment({
     setSelected((current) => (current === assetClass ? null : assetClass));
   }
 
+  // A parent turning something off while their kid has it open closes the panel rather than
+  // leaving a live Invest button behind.
+  const activeSelection = selected && isAssetClassUnlocked(kid, selected) ? selected : null;
+
   function handleConfirm() {
     if (!selected) return;
     onMutate((s) =>
@@ -354,22 +359,28 @@ function NewInvestment({
         {ASSET_CLASS_ORDER.map((assetClass) => {
           const meta = ASSET_CLASSES[assetClass];
           const active = selected === assetClass;
+          // A parent can switch any of these off for a kid (see unlockedAssetClassesFor). Locked
+          // ones stay on the screen, greyed — knowing what exists is half of wanting to earn it.
+          const unlocked = isAssetClassUnlocked(kid, assetClass);
           return (
             <button
               key={assetClass}
               type="button"
-              onClick={() => choose(assetClass)}
+              onClick={() => unlocked && choose(assetClass)}
               aria-pressed={active}
-              className="rounded-xl border-2 p-3 text-left"
+              disabled={!unlocked}
+              className={`rounded-xl border-2 p-3 text-left ${unlocked ? "" : "opacity-55"}`}
               style={{
                 borderColor: active ? assetColor(assetClass) : "rgb(128 128 128 / 0.25)",
                 backgroundColor: active ? `color-mix(in srgb, ${assetColor(assetClass)} 10%, transparent)` : undefined,
               }}
             >
               <p className="text-sm font-medium">
-                {meta.emoji} {meta.label}
+                {unlocked ? meta.emoji : "🔒"} {meta.label}
               </p>
-              <p className="text-xs opacity-70">{meta.description}</p>
+              <p className="text-xs opacity-70">
+                {unlocked ? meta.description : "Locked — ask a parent to turn this one on."}
+              </p>
               <p className="mt-1 text-xs font-medium" style={{ color: assetColor(assetClass) }}>
                 {RIDE_LABELS[meta.ride]}
                 {assetClass === "savings" && ` · ${formatPercent(state.parentSettings.hysaApr)} a year`}
@@ -380,19 +391,19 @@ function NewInvestment({
         })}
       </div>
 
-      {selected && band && (
+      {activeSelection && band && (
         <div className="space-y-4 rounded-xl border border-black/10 p-3 dark:border-white/10">
           <div>
             <h3 className="text-sm font-semibold">
-              {ASSET_CLASSES[selected].emoji} How {ASSET_CLASSES[selected].shortLabel} works
+              {ASSET_CLASSES[activeSelection].emoji} How {ASSET_CLASSES[activeSelection].shortLabel} works
             </h3>
-            <p className="mt-1 text-sm opacity-80">{ASSET_CLASSES[selected].howItWorks}</p>
+            <p className="mt-1 text-sm opacity-80">{ASSET_CLASSES[activeSelection].howItWorks}</p>
           </div>
 
           <div>
             <h3 className="text-sm font-semibold">The rules</h3>
             <ul className="mt-1 space-y-1 text-sm opacity-80">
-              {rulesFor(selected, state, lockWeeks, minHoldDays).map((rule) => (
+              {rulesFor(activeSelection, state, lockWeeks, minHoldDays).map((rule) => (
                 <li key={rule} className="flex gap-2">
                   <span aria-hidden>•</span>
                   <span>{rule}</span>
@@ -441,7 +452,7 @@ function NewInvestment({
                   </option>
                 ))}
               </select>
-              {selected === "cd" && (
+              {activeSelection === "cd" && (
                 <select
                   value={lockWeeks}
                   onChange={(event) => setLockWeeks(Number(event.target.value))}
@@ -519,8 +530,8 @@ function NewInvestment({
               className="w-full rounded-md bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-black"
             >
               {amountValue > 0
-                ? `Invest ${formatCurrency(amountValue)} in ${ASSET_CLASSES[selected].shortLabel} for real`
-                : `Type an amount to invest in ${ASSET_CLASSES[selected].shortLabel}`}
+                ? `Invest ${formatCurrency(amountValue)} in ${ASSET_CLASSES[activeSelection].shortLabel} for real`
+                : `Type an amount to invest in ${ASSET_CLASSES[activeSelection].shortLabel}`}
             </button>
             {overBudget && (
               <p className="text-xs text-red-500">
@@ -532,11 +543,11 @@ function NewInvestment({
         </div>
       )}
 
-      {confirming && selected && band && (
+      {confirming && activeSelection && band && (
         <InvestConfirmDialog
-          assetClass={selected}
+          assetClass={activeSelection}
           amount={amountValue}
-          lockWeeks={selected === "cd" ? lockWeeks : undefined}
+          lockWeeks={activeSelection === "cd" ? lockWeeks : undefined}
           minHoldDays={minHoldDays}
           band={band}
           horizonLabel={horizonLabel}

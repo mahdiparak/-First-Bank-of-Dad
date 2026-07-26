@@ -59,7 +59,7 @@ export function ReconciliationPanel({
   function handleAddAdjustment(event: React.FormEvent) {
     event.preventDefault();
     if (!adjustmentAmount) return;
-    tryMutate((s) => addCashAdjustment(s, Number(adjustmentAmount), adjustmentNote.trim() || undefined));
+    tryMutate((s) => addCashAdjustment(s, Number(adjustmentAmount), adjustmentNote.trim() || undefined, actor));
     setAdjustmentAmount("");
     setAdjustmentNote("");
   }
@@ -94,7 +94,7 @@ export function ReconciliationPanel({
         <div className="space-y-3 border-t border-black/10 pt-3 dark:border-white/10">
           <p className="text-sm opacity-70">Each kid&apos;s own real HYSA account</p>
           {state.kids.map((kid) => (
-            <KidHysaRow key={kid.id} state={state} kidId={kid.id} kidName={kid.name} onMutate={tryMutate} />
+            <KidHysaRow key={kid.id} state={state} kidId={kid.id} kidName={kid.name} actor={actor} onMutate={tryMutate} />
           ))}
         </div>
       )}
@@ -155,7 +155,7 @@ export function ReconciliationPanel({
               {formatCurrency(adjustment.amount)} {adjustment.note && `— ${adjustment.note}`}
             </span>
             <button
-              onClick={() => tryMutate((s) => removeCashAdjustment(s, adjustment.id))}
+              onClick={() => tryMutate((s) => removeCashAdjustment(s, adjustment.id, actor))}
               className="text-xs text-red-500"
             >
               Remove
@@ -190,11 +190,13 @@ function KidHysaRow({
   state,
   kidId,
   kidName,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
   kidId: string;
   kidName: string;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const actual = actualHysaBalanceForKid(state, kidId);
@@ -204,7 +206,7 @@ function KidHysaRow({
 
   function handleSave(event: React.FormEvent) {
     event.preventDefault();
-    onMutate((s) => setActualHysaBalanceForKid(s, kidId, Number(hysaInput)));
+    onMutate((s) => setActualHysaBalanceForKid(s, kidId, Number(hysaInput), actor));
   }
 
   return (

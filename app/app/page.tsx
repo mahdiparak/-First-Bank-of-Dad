@@ -801,7 +801,7 @@ export default function Home() {
 
   function handleAddKid(values: AddKidFormValues) {
     if (!state) return;
-    commitState(addKid(state, values));
+    commitState(addKid(state, values, parentActor));
   }
 
   function handleMutate(mutator: (state: FamilyBankState) => FamilyBankState) {
@@ -1169,7 +1169,7 @@ export default function Home() {
             <>
               <ReconciliationPanel state={state} actor={parentActor} onMutate={handleMutate} />
               <TaxPots state={state} actor={parentActor} onMutate={handleMutate} />
-              <BountyManager state={state} onMutate={handleMutate} />
+              <BountyManager state={state} actor={parentActor} onMutate={handleMutate} />
             </>
           )}
 
@@ -1196,10 +1196,10 @@ export default function Home() {
               </nav>
 
               {settingsSection === "profile" && (
-                <ProfileSettingsPanel state={state} onMutate={handleMutate} onAddKid={handleAddKid} />
+                <ProfileSettingsPanel state={state} actor={parentActor} onMutate={handleMutate} onAddKid={handleAddKid} />
               )}
 
-              {settingsSection === "family" && <ParentSettingsPanel state={state} onMutate={handleMutate} />}
+              {settingsSection === "family" && <ParentSettingsPanel state={state} actor={parentActor} onMutate={handleMutate} />}
 
               {settingsSection === "app" && (
                 <>

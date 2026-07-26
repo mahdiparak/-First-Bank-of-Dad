@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { setDadMatchMilestones, updateParentSettings } from "@/lib/mutations";
-import { DEFAULT_INVESTMENT_MIN_HOLD_DAYS, type FamilyBankState } from "@/lib/schema";
+import { DEFAULT_INVESTMENT_MIN_HOLD_DAYS, type AuditActor, type FamilyBankState } from "@/lib/schema";
 import { InfoTooltip } from "./info-tooltip";
 
 const inputClass =
@@ -11,9 +11,11 @@ const inputClass =
 /** The family's financial rules: interest/tax rates, Dad Match rewards, and tax pot payouts — kept separate from Profile Setup. */
 export function ParentSettingsPanel({
   state,
+  actor,
   onMutate,
 }: {
   state: FamilyBankState;
+  actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
   const settings = state.parentSettings;
@@ -27,12 +29,16 @@ export function ParentSettingsPanel({
   function handleSaveRates(event: React.FormEvent) {
     event.preventDefault();
     onMutate((s) =>
-      updateParentSettings(s, {
-        hysaApr: Number(hysaApr) / 100,
-        cdApr: Number(cdApr) / 100,
-        taxRate: Number(taxRate) / 100,
-        investmentMinHoldDays: Math.max(0, Math.round(Number(minHold) || 0)),
-      }),
+      updateParentSettings(
+        s,
+        {
+          hysaApr: Number(hysaApr) / 100,
+          cdApr: Number(cdApr) / 100,
+          taxRate: Number(taxRate) / 100,
+          investmentMinHoldDays: Math.max(0, Math.round(Number(minHold) || 0)),
+        },
+        actor,
+      ),
     );
   }
 
@@ -40,10 +46,11 @@ export function ParentSettingsPanel({
     event.preventDefault();
     if (!milestoneWeeks || !milestoneBonus) return;
     onMutate((s) =>
-      setDadMatchMilestones(s, [
-        ...s.parentSettings.dadMatchMilestones,
-        { weeks: Number(milestoneWeeks), bonus: Number(milestoneBonus) },
-      ]),
+      setDadMatchMilestones(
+        s,
+        [...s.parentSettings.dadMatchMilestones, { weeks: Number(milestoneWeeks), bonus: Number(milestoneBonus) }],
+        actor,
+      ),
     );
     setMilestoneWeeks("");
     setMilestoneBonus("");
@@ -54,6 +61,7 @@ export function ParentSettingsPanel({
       setDadMatchMilestones(
         s,
         s.parentSettings.dadMatchMilestones.filter((milestone) => milestone.weeks !== weeks),
+        actor,
       ),
     );
   }
