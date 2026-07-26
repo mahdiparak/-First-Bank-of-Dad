@@ -23,6 +23,8 @@ export interface KidProfile {
    * parent says otherwise.
    */
   unlockedAssetClasses?: AssetClass[];
+  /** When this kid finished (or skipped) their course. Unset = show it the first time they open their view. */
+  trainingSeenAt?: string;
 }
 
 /** Kids under this age get the simplified, picture-first UI. */
@@ -64,6 +66,8 @@ export interface ParentProfile {
   email?: string;
   /** This parent's own PIN (SHA-256 hash) for the Kid View -> Parent switch. Falls back to the shared parentSettings.parentPinHash if unset. */
   pinHash?: string;
+  /** When they finished (or skipped) the parent course. Unset = show it on first run. */
+  trainingSeenAt?: string;
 }
 
 export const PARENT_AVATARS = ["👨", "👩", "🧑", "👨‍🦰", "👩‍🦰", "🧔", "👱", "👴", "👵"] as const;

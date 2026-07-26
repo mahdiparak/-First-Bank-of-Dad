@@ -520,6 +520,30 @@ export function updateKidProfile(
   return logAudit(updated, actor, `Updated ${kidName(state, kidId)}'s profile (${describePatch(patch)})`, { kidId });
 }
 
+/**
+ * Records that someone got to the end of their course, or skipped it. Not audited: it's a "don't
+ * show me this again" flag, not a money-moving action, and one line per family member per lifetime
+ * in the Activity log would be noise.
+ */
+export function markTrainingSeen(
+  state: FamilyBankState,
+  who: { kidId: string } | { parentId: string },
+): FamilyBankState {
+  const at = new Date().toISOString();
+  if ("kidId" in who) {
+    return touch({
+      ...state,
+      kids: state.kids.map((kid) => (kid.id === who.kidId ? { ...kid, trainingSeenAt: at } : kid)),
+    });
+  }
+  return touch({
+    ...state,
+    parentProfiles: state.parentProfiles.map((parent) =>
+      parent.id === who.parentId ? { ...parent, trainingSeenAt: at } : parent,
+    ),
+  });
+}
+
 /** Parent-only: sets, changes, or (passing null) removes a kid's own PIN for opening their Kid View. */
 export function setKidPin(
   state: FamilyBankState,

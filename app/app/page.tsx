@@ -17,6 +17,7 @@ import { ReconciliationPanel } from "@/components/reconciliation-panel";
 import { AppLock, needsAppLock } from "@/components/app-lock";
 import { JoinApprovalBanner } from "@/components/join-approval";
 import { OnboardingWizard, type CreateFamilyResult, type JoinResult } from "@/components/onboarding-wizard";
+import { Training, TrainingOverlay } from "@/components/training";
 import { KidPinPrompt, RoleChooser } from "@/components/role-gate";
 import { FamilyPhraseSettings } from "@/components/family-phrase-settings";
 import { SyncSettings } from "@/components/sync-settings";
@@ -28,7 +29,7 @@ import { notifyClaimedBounties, notifyNewQuests } from "@/lib/push-notifications
 import { deriveEncryptionKey, deriveRoomIdFromPhraseAndName } from "@/lib/crypto";
 import { runInvestmentEngine } from "@/lib/investment-engine";
 import { loadMarketData, type MarketDataResponse } from "@/lib/market-data";
-import { addKid } from "@/lib/mutations";
+import { addKid, markTrainingSeen } from "@/lib/mutations";
 import { findKidByName, mergeJoinedKid, mergeJoinedParent } from "@/lib/onboarding";
 import { createEmptyState, kidAvatar, kidColor, normalizeState, type AuditActor, type FamilyBankState } from "@/lib/schema";
 import {
@@ -63,7 +64,7 @@ import { SyncClient, type JoinRequest, type SyncMutation, type SyncStatus } from
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "";
 
 type Phase = "loading" | "onboarding" | "waiting-approval" | "legacy-state" | "ready";
-type ParentTab = "kids" | "approvals" | "money" | "talk" | "audit" | "settings";
+type ParentTab = "kids" | "approvals" | "money" | "talk" | "audit" | "learn" | "settings";
 type SettingsSection = "profile" | "family" | "app";
 
 function primeState(loaded: FamilyBankState | null, key: CryptoKey): FamilyBankState | null {
@@ -138,6 +139,8 @@ export default function Home() {
   const [state, setState] = useState<FamilyBankState | null>(null);
   const [selectedKidId, setSelectedKidId] = useState<string | null>(null);
   const [parentTab, setParentTab] = useState<ParentTab>("kids");
+  /** Closed the first-run course without finishing it — this session only, it comes back next open. */
+  const [trainingDismissed, setTrainingDismissed] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("profile");
   const [deviceRole, setDeviceRole] = useState<DeviceRole | null>(null);
   const [deviceKidId, setDeviceKidId] = useState<string | null>(null);
@@ -1037,6 +1040,7 @@ export default function Home() {
     { id: "money", label: "🏦 Money" },
     { id: "talk", label: "💬 Money Talk" },
     { id: "audit", label: "🧾 Activity" },
+    { id: "learn", label: "🎓 Learn" },
     { id: "settings", label: "⚙️ Settings" },
   ];
 
@@ -1056,8 +1060,22 @@ export default function Home() {
     : "Dad";
   const parentActor: AuditActor = { role: "parent", name: currentParentName };
 
+  // First run: a brand-new parent gets the course before the dashboard, and can skip it. After that
+  // it only ever appears because they asked for it, under 🎓 Learn.
+  const thisParent = state?.parentProfiles.find((parent) => parent.id === deviceParentId);
+  const showParentTraining =
+    deviceRole === "parent" && Boolean(thisParent) && !thisParent?.trainingSeenAt && !trainingDismissed;
+
   return (
     <>
+      {showParentTraining && thisParent && (
+        <TrainingOverlay
+          firstRun
+          audience="parent"
+          onClose={() => setTrainingDismissed(true)}
+          onFinish={() => handleMutate((s) => markTrainingSeen(s, { parentId: thisParent.id }))}
+        />
+      )}
       <InstallBanner />
       <main className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-6">
         <header className="flex items-center justify-between">
@@ -1126,15 +1144,15 @@ export default function Home() {
         </section>
       ) : (
         <>
-          {/* A fixed three-across grid rather than flex-wrap: six tabs of uneven width wrapped
-              3 / 2 / 1, stranding Settings alone on a line of its own. Three equal columns make it
-              two tidy rows at any screen width, with no tab ever orphaned. */}
-          <nav className="grid grid-cols-3 gap-2">
+          {/* A fixed grid rather than flex-wrap: tabs of uneven width wrapped 3 / 2 / 1, stranding
+              Settings alone on a line of its own. Equal columns make it two tidy rows at any screen
+              width, with no tab ever orphaned — four across now that Learn is a destination too. */}
+          <nav className="grid grid-cols-4 gap-1.5 sm:gap-2">
             {parentTabs.map((entry) => (
               <button
                 key={entry.id}
                 onClick={() => setParentTab(entry.id)}
-                className={`flex items-center justify-center gap-1 rounded-full px-2 py-1.5 text-center text-xs leading-tight sm:text-sm ${
+                className={`flex items-center justify-center gap-1 rounded-full px-1.5 py-1.5 text-center text-[11px] leading-tight sm:px-2 sm:text-sm ${
                   parentTab === entry.id
                     ? "bg-black text-white dark:bg-white dark:text-black"
                     : "border border-black/20 dark:border-white/20"
@@ -1207,6 +1225,12 @@ export default function Home() {
           {parentTab === "talk" && <MoneyTalk state={state} />}
 
           {parentTab === "audit" && <AuditTrailPanel state={state} onMutate={handleMutate} />}
+
+          {parentTab === "learn" && (
+            <section className="rounded-xl border border-black/10 p-4 dark:border-white/10">
+              <Training audience="parent" onClose={() => setParentTab("kids")} />
+            </section>
+          )}
 
           {parentTab === "settings" && (
             <>

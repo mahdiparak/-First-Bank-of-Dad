@@ -16,6 +16,7 @@ import {
   claimBounty,
   createGoal,
   deleteGoal,
+  markTrainingSeen,
   removeTransaction,
   requestGoalSpend,
   requestWithdrawal,
@@ -42,9 +43,11 @@ import { QuestBoard, QuestCard } from "./quest-board";
 import { WithdrawalPreview } from "./withdrawal-preview";
 import { WithdrawalConfirmDialog } from "./withdrawal-confirm";
 import { YoungInvest } from "./young-invest";
+import { Training, TrainingOverlay } from "./training";
+import { audienceForKid } from "@/lib/training";
 import type { MarketDataResponse } from "@/lib/market-data";
 
-type KidTab = "home" | "goals" | "invest" | "quests" | "ledger";
+type KidTab = "home" | "goals" | "invest" | "quests" | "ledger" | "learn";
 
 export function KidDashboard({
   state,
@@ -63,6 +66,9 @@ export function KidDashboard({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<KidTab>("home");
+  const [showLearn, setShowLearn] = useState(false);
+  /** Closed the first-run course without finishing — this session only. */
+  const [dismissedTraining, setDismissedTraining] = useState(false);
 
   function tryMutate(mutator: (state: FamilyBankState) => FamilyBankState) {
     try {
@@ -73,11 +79,36 @@ export function KidDashboard({
     }
   }
 
+  const audience = audienceForKid(kid);
+
+  // A kid meets their own course the first time they open their view, in their own words, and can
+  // skip it. A parent looking at the same screen doesn't get ambushed by it — it isn't theirs.
+  const firstRun = role === "kid" && !kid.trainingSeenAt && !dismissedTraining;
+  const trainingOverlay = firstRun ? (
+    <TrainingOverlay
+          firstRun
+      audience={audience}
+      onClose={() => setDismissedTraining(true)}
+      onFinish={() => tryMutate((s) => markTrainingSeen(s, { kidId: kid.id }))}
+    />
+  ) : null;
+
   if (isYoungKidView(kid)) {
     return (
       <div className="space-y-6">
+        {trainingOverlay}
         {error && <p className="text-sm text-red-500">{error}</p>}
         <YoungKidHome state={state} kid={kid} role={role} marketData={marketData} actor={actor} onMutate={tryMutate} />
+        {/* A little kid can't use a tab bar to find this, so it's a door on their home screen —
+            and it opens over the top, because the bottom of a long scroll is nowhere. */}
+        {showLearn && <TrainingOverlay audience="young" onClose={() => setShowLearn(false)} />}
+        <button
+          type="button"
+          onClick={() => setShowLearn(true)}
+          className="w-full rounded-3xl border-2 border-dashed border-black/20 p-5 text-lg font-semibold dark:border-white/25"
+        >
+          🎓 Learn about money
+        </button>
       </div>
     );
   }
@@ -92,6 +123,7 @@ export function KidDashboard({
     { id: "invest", label: "📈 Invest" },
     { id: "quests", label: "🗺️ Quests" },
     { id: "ledger", label: "📒 Ledger" },
+    { id: "learn", label: "🎓 Learn" },
   ];
 
   return (
@@ -118,6 +150,7 @@ export function KidDashboard({
         <HomeTab state={state} kid={kid} role={role} marketData={marketData} actor={actor} onMutate={tryMutate} />
       )}
       {tab === "goals" && <GoalGetter state={state} kid={kid} role={role} actor={actor} onMutate={tryMutate} />}
+      {tab === "learn" && <Training audience={audience} onClose={() => setTab("home")} />}
       {tab === "invest" && (
         <InvestmentSandbox state={state} kid={kid} role={role} marketData={marketData} actor={actor} onMutate={tryMutate} />
       )}
