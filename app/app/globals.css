@@ -11,6 +11,12 @@
   --asset-cd: #eb6834;
   --asset-stocks: #1baf7a;
   --asset-crypto: #eda100;
+
+  /* The three non-investment buckets, checked as one set with the asset colours above in the
+     order they're stacked (cash, pending, goals, then the four assets). */
+  --bucket-cash: #e87ba4;
+  --bucket-pending: #4a3aa7;
+  --bucket-goals: #008300;
 }
 
 @theme inline {
@@ -29,6 +35,10 @@
     --asset-cd: #d95926;
     --asset-stocks: #199e70;
     --asset-crypto: #c98500;
+
+    --bucket-cash: #d55181;
+    --bucket-pending: #9085e9;
+    --bucket-goals: #008300;
   }
 }
 

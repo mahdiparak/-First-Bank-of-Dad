@@ -20,7 +20,7 @@ import {
   requestGoalSpend,
   requestWithdrawal,
   setGoalWeeklyContribution,
-  totalBalanceForKid,
+  virtualBalanceForKid,
 } from "@/lib/mutations";
 import {
   isYoungKidView,
@@ -34,6 +34,7 @@ import {
 import { BadgeWall } from "./badge-wall";
 import { MonthCalendar, MONTH_LABELS, type CalendarMarker } from "./calendar";
 import { EnvelopeInbox } from "./envelope-inbox";
+import { MoneyBuckets } from "./money-buckets";
 import { MoneyTimeline } from "./money-timeline";
 import { InvestmentSandbox } from "./investment-sandbox";
 import { QuestBoard, QuestCard } from "./quest-board";
@@ -139,7 +140,7 @@ function HomeTab({
   actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
-  const total = totalBalanceForKid(state, kid.id);
+  const total = virtualBalanceForKid(state, kid.id);
   const available = availableBalanceForKid(state, kid.id);
   const days = daysUntilPayday(kid);
   const streakWeeks = weeksWithoutWithdrawalFor(state, kid.id);
@@ -159,10 +160,13 @@ function HomeTab({
         <p className="text-4xl font-semibold tabular-nums">{formatCurrency(total)}</p>
         {available !== total && (
           <p className="text-xs opacity-60">
-            {formatCurrency(available)} available (rest saved toward goals or pending approval)
+            {formatCurrency(available)} ready to spend — the rest is saved for goals, waiting for Dad, or invested
           </p>
         )}
       </div>
+
+      {/* Straight after the total: the same money, split into the jars it's actually sitting in. */}
+      <MoneyBuckets state={state} kid={kid} />
 
       {/* The money story is the main screen: everything else hangs off this picture. */}
       <MoneyTimeline state={state} kid={kid} marketData={marketData} />
@@ -303,7 +307,7 @@ function YoungKidHome({
   actor: AuditActor;
   onMutate: (mutator: (state: FamilyBankState) => FamilyBankState) => void;
 }) {
-  const total = totalBalanceForKid(state, kid.id);
+  const total = virtualBalanceForKid(state, kid.id);
   const available = availableBalanceForKid(state, kid.id);
   const days = daysUntilPayday(kid);
   const streakWeeks = weeksWithoutWithdrawalFor(state, kid.id);
@@ -330,6 +334,8 @@ function YoungKidHome({
           {days === 0 ? "💰 Payday is TODAY!" : `💰 ${days} more sleep${days === 1 ? "" : "s"} until payday`}
         </p>
       </section>
+
+      <MoneyBuckets state={state} kid={kid} young />
 
       <MoneyTimeline state={state} kid={kid} marketData={marketData} />
 

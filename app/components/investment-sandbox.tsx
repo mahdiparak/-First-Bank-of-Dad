@@ -472,8 +472,8 @@ function NewInvestment({
               guaranteed={band.guaranteed}
             />
             <p className="text-xs opacity-60">
-              The flat dashed line is the {formatCurrency(simPrincipal)} that went in. Every wiggle is one month.
-              {!band.guaranteed && " Best and worst are real runs too — same choice, different luck."}
+              The flat dashed line is the {formatCurrency(simPrincipal)} that went in. Every step along the line is one{" "}
+              {band.step}.{!band.guaranteed && " Best and worst are real runs too — same choice, different luck."}
             </p>
 
             <div className="grid grid-cols-3 gap-3 text-sm">

@@ -354,7 +354,15 @@ export function investmentHistory(
 }
 
 export interface WhatIfResult {
-  values: number[]; // ending value after each simulated month, values[0] is month 1
+  /** Ending value after each simulated step; values[0] is step 1. See `step` for how long a step is. */
+  values: number[];
+  /**
+   * Savings/CD step one WEEK at a time, at the same APR÷52 the real positions compound at, so the
+   * line is as smooth as the thing it's predicting. Stocks/crypto step one MONTH at a time because
+   * that's the granularity of the historical returns they're drawn from — a made-up weekly split
+   * would invent detail the data doesn't have.
+   */
+  step: "week" | "month";
   endingValue: number;
   minValue: number;
   maxValue: number;
@@ -371,13 +379,20 @@ export function simulateWhatIf(
   parentSettings: { hysaApr: number; cdApr: number },
   marketData: MarketDataResponse | null,
 ): WhatIfResult {
-  const months = Math.max(1, Math.round(weeks / (52 / 12)));
-
   if (assetClass === "savings" || assetClass === "cd") {
     const apr = assetClass === "savings" ? parentSettings.hysaApr : parentSettings.cdApr;
-    const values = Array.from({ length: months }, (_, i) => round2(principal * Math.pow(1 + apr / 12, i + 1)));
-    return { values, endingValue: values[values.length - 1], minValue: Math.min(...values), maxValue: Math.max(...values) };
+    const steps = Math.max(1, Math.round(weeks));
+    const values = Array.from({ length: steps }, (_, i) => round2(principal * Math.pow(1 + apr / 52, i + 1)));
+    return {
+      values,
+      step: "week",
+      endingValue: values[values.length - 1],
+      minValue: Math.min(...values),
+      maxValue: Math.max(...values),
+    };
   }
+
+  const months = Math.max(1, Math.round(weeks / (52 / 12)));
 
   const returns = historicalReturnsFor(assetClass, marketData);
   let value = principal;
@@ -387,14 +402,22 @@ export function simulateWhatIf(
     value *= 1 + sample;
     values.push(round2(value));
   }
-  return { values, endingValue: values[values.length - 1], minValue: Math.min(...values), maxValue: Math.max(...values) };
+  return {
+    values,
+    step: "month",
+    endingValue: values[values.length - 1],
+    minValue: Math.min(...values),
+    maxValue: Math.max(...values),
+  };
 }
 
 export interface WhatIfBand {
-  /** Three real runs, each starting at the principal (index 0 = today, then one point per month). */
+  /** Three real runs, each starting at the principal (index 0 = today, then one point per `step`). */
   typical: number[];
   best: number[];
   worst: number[];
+  /** How long one point is worth — weekly for the fixed-rate assets, monthly for the market ones. */
+  step: "week" | "month";
   /** True for Savings/CD, where the rate is fixed and all three runs are the same line. */
   guaranteed: boolean;
   /** Share of runs that ended below what was put in, 0–1. */
@@ -416,21 +439,25 @@ export function simulateWhatIfBand(
   parentSettings: AssetRates,
   marketData: MarketDataResponse | null,
 ): WhatIfBand {
-  const single = () => [round2(principal), ...simulateWhatIf(assetClass, principal, weeks, parentSettings, marketData).values];
+  const run = () => simulateWhatIf(assetClass, principal, weeks, parentSettings, marketData);
+  const single = () => {
+    const result = run();
+    return { path: [round2(principal), ...result.values], step: result.step };
+  };
 
   if (assetClass === "savings" || assetClass === "cd") {
-    const path = single();
-    return { typical: path, best: path, worst: path, guaranteed: true, chanceOfLoss: 0, runs: 1 };
+    const { path, step } = single();
+    return { typical: path, best: path, worst: path, step, guaranteed: true, chanceOfLoss: 0, runs: 1 };
   }
 
-  const paths = Array.from({ length: WHAT_IF_RUNS }, single).sort(
-    (a, b) => a[a.length - 1] - b[b.length - 1],
-  );
+  const runs = Array.from({ length: WHAT_IF_RUNS }, single);
+  const paths = runs.map((entry) => entry.path).sort((a, b) => a[a.length - 1] - b[b.length - 1]);
   const losses = paths.filter((path) => path[path.length - 1] < principal).length;
   return {
     worst: paths[0],
     typical: paths[Math.floor(paths.length / 2)],
     best: paths[paths.length - 1],
+    step: runs[0].step,
     guaranteed: false,
     chanceOfLoss: losses / paths.length,
     runs: paths.length,
