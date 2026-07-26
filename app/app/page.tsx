@@ -144,6 +144,9 @@ export default function Home() {
   const [pendingKidId, setPendingKidId] = useState<string | null>(null);
   const [deviceParentId, setDeviceParentId] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
+  // The in-app refresh: busy flag, and the time of the last successful one for a bit of reassurance.
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   // Sockets (including this device) currently in this room, per the relay's presence message. A
   // green "open" WebSocket only means THIS device's connection succeeded — it says nothing about
   // whether anyone else is actually in the same room (a phrase/room typo lands you alone in a
@@ -728,6 +731,51 @@ export default function Home() {
    *  the socket isn't open, and there's no ack from the blind relay either way. This makes both
    *  outcomes visible: an honest "not connected" when there's nowhere to send it, and a "sent"
    *  confirmation (not a delivery guarantee — the relay never acks) otherwise. */
+  /**
+   * Everything a browser reload used to do, without the reload — which matters because reloading
+   * now costs a PIN on every single open. Catches the app up on three fronts: the scheduled
+   * engines (a payday, a week's interest, a Dad Match bonus that came due while the app sat open),
+   * fresh market prices, and anything other devices changed while this one wasn't listening.
+   */
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshedAt(null);
+    try {
+      const data = await loadMarketData({ force: true });
+      setMarketData(data);
+      setMarketDataLoaded(true);
+
+      const current = stateRef.current;
+      if (current) {
+        const caughtUp = runInvestmentEngine(runScheduledEngines(current), data);
+        if (caughtUp !== current) commitState(caughtUp);
+      }
+
+      // Ask the room for anything missed, and hand over what this device has. A socket that
+      // dropped while the app stayed open won't reconnect on its own until its backoff timer
+      // fires, so a manual refresh jumps that queue.
+      const client = syncClientRef.current;
+      if (client) {
+        if (syncStatus !== "open") {
+          client.disconnect();
+          client.connect();
+        } else if (deviceIdRef.current) {
+          const mine = stateRef.current;
+          if (mine && !isEmptyState(mine)) await broadcastSnapshot(mine);
+          await client.send({
+            type: "request-snapshot",
+            deviceId: deviceIdRef.current,
+            sentAt: new Date().toISOString(),
+          });
+        }
+      }
+      setRefreshedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   async function handleSyncNow() {
     setSyncNowMessage(null);
     if (!state) return;
@@ -929,6 +977,7 @@ export default function Home() {
             </h1>
             <div className="flex items-center gap-3">
               <SyncBadge status={syncStatus} peerCount={peerCount} />
+              <RefreshButton busy={refreshing} refreshedAt={refreshedAt} onRefresh={handleRefresh} />
               <ProfilePanel
                 state={state}
                 role="kid"
@@ -991,6 +1040,7 @@ export default function Home() {
           <h1 className="text-xl font-semibold">First Bank of Dad</h1>
           <div className="flex items-center gap-3">
             <SyncBadge status={syncStatus} peerCount={peerCount} />
+            <RefreshButton busy={refreshing} refreshedAt={refreshedAt} onRefresh={handleRefresh} />
             {state && (
               <ProfilePanel
                 state={state}
@@ -1195,6 +1245,36 @@ export default function Home() {
  * presence message — is what actually answers "is this doing anything." status === "open" but
  * peerCount <= 1 is called out separately so that distinction is visible instead of just "Synced".
  */
+/**
+ * The button that replaces reloading the page. Deliberately in the header of every screen, next to
+ * the sync badge: the two answer the same question ("am I looking at the latest?"), and reaching
+ * for a browser refresh now costs a PIN.
+ */
+function RefreshButton({
+  busy,
+  refreshedAt,
+  onRefresh,
+}: {
+  busy: boolean;
+  refreshedAt: string | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={busy}
+      aria-label="Refresh — check for new money and updates from other devices"
+      title={refreshedAt ? `Last refreshed at ${refreshedAt}` : "Refresh"}
+      className="flex h-8 w-8 items-center justify-center rounded-full border border-black/20 text-base disabled:opacity-50 dark:border-white/20"
+    >
+      <span className={busy ? "inline-block animate-spin" : undefined} aria-hidden>
+        ↻
+      </span>
+    </button>
+  );
+}
+
 function SyncBadge({ status, peerCount }: { status: SyncStatus; peerCount: number }) {
   if (status === "open" && peerCount <= 1) {
     return (

@@ -51,13 +51,18 @@ function processAllowanceForKid(state: FamilyBankState, kid: KidProfile, now: Da
       const taxAt = new Date(due.getTime() + 1).toISOString();
       working = recordTransaction(working, kid.id, -taxAmount, "🧾", "tax", "Family Tax", taxAt);
     }
+    // Same trap as the Dad Match receipt below: without a pot row, the tax comes out of the kid's
+    // balance and lands nowhere, so it can never be refunded. Create the pot rather than lose it.
+    const hasPot = working.taxPots.some((pot) => pot.kidId === kid.id);
     working = {
       ...working,
-      taxPots: working.taxPots.map((pot) =>
-        pot.kidId === kid.id
-          ? { ...pot, balance: round2(pot.balance + taxAmount), totalPaid: round2(pot.totalPaid + taxAmount) }
-          : pot,
-      ),
+      taxPots: hasPot
+        ? working.taxPots.map((pot) =>
+            pot.kidId === kid.id
+              ? { ...pot, balance: round2(pot.balance + taxAmount), totalPaid: round2(pot.totalPaid + taxAmount) }
+              : pot,
+          )
+        : [...working.taxPots, { kidId: kid.id, balance: taxAmount, rate: taxRate, totalPaid: taxAmount }],
       kids: working.kids.map((candidate) =>
         candidate.id === kid.id ? { ...candidate, lastAllowancePaidAt: paidAt } : candidate,
       ),
@@ -165,12 +170,19 @@ function processDadMatchForKid(state: FamilyBankState, kid: KidProfile, now: Dat
     );
   }
 
+  // The receipt for "we already paid this milestone" lives on the kid's streak row — so if there
+  // ISN'T one (a hand-built or imported state, or a kid row that predates addKid creating it),
+  // a plain map writes the receipt nowhere and every later engine run pays the bonus AGAIN. Create
+  // the row instead of silently dropping the record.
   const highestPaid = newlyReached[newlyReached.length - 1].weeks;
+  const hasStreakRow = working.streaks.some((candidate) => candidate.kidId === kid.id);
   return {
     ...working,
-    streaks: working.streaks.map((candidate) =>
-      candidate.kidId === kid.id ? { ...candidate, lastMilestonePaidWeeks: highestPaid } : candidate,
-    ),
+    streaks: hasStreakRow
+      ? working.streaks.map((candidate) =>
+          candidate.kidId === kid.id ? { ...candidate, lastMilestonePaidWeeks: highestPaid } : candidate,
+        )
+      : [...working.streaks, { kidId: kid.id, weeksWithoutWithdrawal: 0, lastMilestonePaidWeeks: highestPaid }],
   };
 }
 
