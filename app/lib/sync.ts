@@ -36,13 +36,30 @@ export type SyncMutation =
   // roster (the phrase/room were still correct); "declined" means a parent actively said no.
   | { type: "join-rejected"; targetDeviceId: string; reason: "name-not-found" | "declined"; deviceId: string; sentAt: string };
 
-export type SyncStatus = "connecting" | "open" | "closed" | "error";
+/** "unconfigured" never comes from a socket — it's this build having no relay address at all, which
+ *  is a setup problem and not a network one, and reads very differently to someone looking at it. */
+export type SyncStatus = "connecting" | "open" | "closed" | "error" | "unconfigured";
 
 /** The relay's one self-originated (never encrypted) message: how many sockets — including this
  *  one — are currently connected to this room. See worker/worker.js's presenceMessage(). */
 interface PresenceMessage {
   __presence__: true;
   count: number;
+}
+
+/** The relay's other self-originated message: how far through the room's mailbox this client is. */
+interface CursorMessage {
+  __cursor__: true;
+  seq: number;
+}
+
+function isCursorMessage(value: unknown): value is CursorMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { __cursor__?: unknown }).__cursor__ === true &&
+    typeof (value as { seq?: unknown }).seq === "number"
+  );
 }
 
 function isPresenceMessage(value: unknown): value is PresenceMessage {
@@ -76,17 +93,21 @@ export interface SyncClientOptions {
   /** How many sockets (including this device) are in the room right now — the only reliable way
    *  to tell "my connection is open" apart from "I'm actually in the same room as anyone else." */
   onPresenceChange?: (count: number) => void;
+  /** The relay's mailbox position after a replay or a live delivery. */
+  onCursorChange?: (seq: number) => void;
 }
 
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
-function tryParsePresence(data: string): PresenceMessage | null {
+function tryParseControl(data: string): PresenceMessage | CursorMessage | null {
   // Real ciphertext is base64 (no '{'), so this cheaply rules out the common case before parsing.
   if (!data.startsWith("{")) return null;
   try {
     const parsed: unknown = JSON.parse(data);
-    return isPresenceMessage(parsed) ? parsed : null;
+    if (isPresenceMessage(parsed)) return parsed;
+    if (isCursorMessage(parsed)) return parsed;
+    return null;
   } catch {
     return null;
   }
@@ -99,6 +120,10 @@ export class SyncClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private zombieCheckTimer: ReturnType<typeof setInterval> | null = null;
   private lastActivityAt = 0;
+  /** Highest mailbox sequence this device has been handed. Session-scoped on purpose: starting from
+   *  zero on every open means catching up can't be silently skipped by a cursor that got ahead of
+   *  what was actually applied, and replaying a snapshot is free — an older one can never win. */
+  private cursor = 0;
   private closedByUser = false;
 
   constructor(private readonly options: SyncClientOptions) {}
@@ -162,6 +187,10 @@ export class SyncClient {
     ws.addEventListener("open", () => {
       this.reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
       this.lastActivityAt = Date.now();
+      // Before anything else: ask the relay for whatever was said while this device was away. A
+      // relay from before the mailbox existed just forwards this to peers, who can't decrypt it
+      // and drop it — so an un-upgraded relay degrades to the old behaviour rather than breaking.
+      ws.send(JSON.stringify({ __hello__: true, since: this.cursor }));
       this.options.onStatusChange?.("open");
       this.startKeepalive();
     });
@@ -222,9 +251,13 @@ export class SyncClient {
     // The relay's own messages are deliberately plaintext JSON (see worker.js) — check for those
     // before attempting to decrypt, since neither is AES-GCM ciphertext and would just fail below.
     if (data === PONG_MESSAGE) return;
-    const presence = tryParsePresence(data);
-    if (presence) {
-      this.options.onPresenceChange?.(presence.count);
+    const control = tryParseControl(data);
+    if (control) {
+      if ("count" in control) this.options.onPresenceChange?.(control.count);
+      else {
+        this.cursor = control.seq;
+        this.options.onCursorChange?.(control.seq);
+      }
       return;
     }
     try {

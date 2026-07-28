@@ -352,7 +352,10 @@ export default function Home() {
 
   function startSync(key: CryptoKey, roomId: string) {
     if (!RELAY_URL) {
-      setSyncStatus("error");
+      // Not the same thing as being offline, and saying so mattered: a build shipped without
+      // NEXT_PUBLIC_RELAY_URL read as "Offline — saved on this device", which looks like a network
+      // blip you'd wait out rather than a setting nobody ever filled in.
+      setSyncStatus("unconfigured");
       return;
     }
     const client = new SyncClient({
@@ -442,6 +445,9 @@ export default function Home() {
     } else {
       setState((current) => {
         if (!current) return current;
+        // Same last-write-wins rule the snapshot branch uses. Now that the relay replays a mailbox,
+        // a message can arrive long after it was sent, and applying it blindly would undo newer work.
+        if (current.updatedAt >= mutation.sentAt) return current;
         const merged = { ...current, ...mutation.patch, updatedAt: mutation.sentAt };
         void saveState(key, merged);
         return merged;
@@ -792,7 +798,7 @@ export default function Home() {
 
       await spun;
       setRefreshedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
-      setRefreshResult(describeRefresh(before, caughtUp, askedPeers, syncStatus === "open"));
+      setRefreshResult(describeRefresh(before, caughtUp, askedPeers, syncStatus, peerCount));
     } catch {
       await spun;
       setRefreshResult({ tone: "warn", message: "Couldn't check just now — try again in a moment." });
@@ -804,6 +810,12 @@ export default function Home() {
   async function handleSyncNow() {
     setSyncNowMessage(null);
     if (!state) return;
+    if (syncStatus === "unconfigured") {
+      setSyncNowMessage(
+        "Sync isn't set up on this build — no relay address was configured, so this device can only ever save locally.",
+      );
+      return;
+    }
     if (syncStatus !== "open") {
       setSyncNowMessage("Not connected right now — check your internet connection and try again.");
       return;
@@ -814,7 +826,7 @@ export default function Home() {
       const sentAt = `Sent at ${new Date().toLocaleTimeString()}`;
       setSyncNowMessage(
         peerCount <= 1
-          ? `${sentAt} — but no other device is in this room right now, so there's no one to receive it. Double-check the Family Phrase and room name match on the other device.`
+          ? `${sentAt} — no other device is in this room right now, so it's waiting on the relay instead. They'll get it next time they open the app. If they never do, check the Family Phrase and room name match.`
           : `${sentAt} — any other device on the same Family Phrase that's online now will pick it up within seconds.`,
       );
     } catch (error) {
@@ -1298,7 +1310,9 @@ export default function Home() {
  * nothing about whether anyone else is actually in the same room (a phrase/room typo silently
  * lands you alone in a different, empty room, with no error). peerCount — from the relay's
  * presence message — is what actually answers "is this doing anything." status === "open" but
- * peerCount <= 1 is called out separately so that distinction is visible instead of just "Synced".
+ * peerCount <= 1 is called out separately so that distinction is visible instead of just "Synced",
+ * and a build with no relay address at all gets its own label rather than borrowing "Offline",
+ * which reads like something that will fix itself.
  */
 interface RefreshResult {
   tone: "ok" | "new" | "warn";
@@ -1314,7 +1328,8 @@ function describeRefresh(
   before: FamilyBankState | null,
   after: FamilyBankState | null,
   askedPeers: boolean,
-  online: boolean,
+  status: SyncStatus,
+  peerCount: number,
 ): RefreshResult {
   if (before && after && after !== before) {
     const newTransactions = after.transactions.length - before.transactions.length;
@@ -1332,8 +1347,19 @@ function describeRefresh(
     }
     return { tone: "new", message: "Caught up — investment values updated" };
   }
-  if (!online) return { tone: "warn", message: "Up to date here — offline, so nothing from other devices" };
-  return { tone: "ok", message: askedPeers ? "Up to date — checked with your other devices" : "Up to date" };
+  if (status === "unconfigured") {
+    return { tone: "warn", message: "Up to date here — but sync isn't set up, so this device is on its own" };
+  }
+  if (status !== "open") {
+    return { tone: "warn", message: "Up to date here — offline, so nothing from other devices" };
+  }
+  // "Checked with your other devices" was a lie whenever nobody else was connected. The relay's
+  // mailbox is what was really checked, and that's the part worth saying — it's why an approval
+  // sent while this phone was closed still turns up.
+  if (!askedPeers) return { tone: "ok", message: "Up to date" };
+  return peerCount <= 1
+    ? { tone: "ok", message: "Up to date — nobody else is online, checked for anything they left" }
+    : { tone: "ok", message: "Up to date — checked with your other devices" };
 }
 
 function formatMoney(amount: number): string {
@@ -1412,12 +1438,14 @@ function SyncBadge({ status, peerCount }: { status: SyncStatus; peerCount: numbe
     open: `Synced with ${peerCount - 1} device${peerCount - 1 === 1 ? "" : "s"}`,
     closed: "Offline — saved on this device",
     error: "Offline — saved on this device",
+    unconfigured: "Sync not set up — this device only",
   };
   const colors: Record<SyncStatus, string> = {
     connecting: "bg-yellow-500",
     open: "bg-green-500",
     closed: "bg-gray-400",
     error: "bg-gray-400",
+    unconfigured: "bg-amber-500",
   };
   return (
     <span className="flex items-center gap-2 text-sm opacity-70">

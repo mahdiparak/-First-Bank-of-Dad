@@ -1,0 +1,4 @@
+# Local wrangler dev state (Durable Object storage, caches) — machine-specific, never shared.
+.wrangler/
+node_modules/
+.env*
